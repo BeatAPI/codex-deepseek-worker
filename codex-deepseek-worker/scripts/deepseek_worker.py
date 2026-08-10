@@ -524,6 +524,9 @@ def remove_table_bool_if_value(text: str, table: str, key: str, expected: bool) 
 
 def agent_text(role: str) -> str:
     description_noun = "worker" if role == LEGACY_ROLE else "subagent"
+    nickname_candidates = (
+        "" if role == LEGACY_ROLE else f'nickname_candidates = ["{ROLE}"]\n'
+    )
     handoff_contract = (
         ""
         if role == LEGACY_ROLE
@@ -535,7 +538,7 @@ def agent_text(role: str) -> str:
         else "DeepSeek, a focused text-only coding subagent"
     )
     return f'''name = "{role}"
-description = "Text-only DeepSeek {description_noun} for bounded repository research, implementation, tests, review, and documentation. Use it when parallel capacity, long-context reading, or an independent model pass adds value. Do not use it for visual inspection or final high-risk decisions.{handoff_contract}"
+{nickname_candidates}description = "Text-only DeepSeek {description_noun} for bounded repository research, implementation, tests, review, and documentation. Use it when parallel capacity, long-context reading, or an independent model pass adds value. Do not use it for visual inspection or final high-risk decisions.{handoff_contract}"
 model = "{MODEL}"
 model_provider = "{PROVIDER}"
 model_reasoning_effort = "{EFFORT}"
@@ -1100,11 +1103,19 @@ def query_child_metadata(
                 columns = {
                     row[1] for row in connection.execute("PRAGMA table_info(threads)").fetchall()
                 }
-                required = {"id", "model_provider", "model", "reasoning_effort", "agent_role"}
+                required = {
+                    "id",
+                    "model_provider",
+                    "model",
+                    "reasoning_effort",
+                    "agent_role",
+                    "agent_nickname",
+                }
                 if not required.issubset(columns):
                     continue
                 row = connection.execute(
-                    "SELECT model_provider, model, reasoning_effort, agent_role FROM threads WHERE id = ?",
+                    "SELECT model_provider, model, reasoning_effort, agent_role, agent_nickname "
+                    "FROM threads WHERE id = ?",
                     (child_id,),
                 ).fetchone()
         except (OSError, sqlite3.Error):
@@ -1115,6 +1126,7 @@ def query_child_metadata(
                 "model": row[1],
                 "reasoning_effort": row[2],
                 "agent_role": row[3],
+                "agent_nickname": row[4],
             }
     return None
 
@@ -1203,6 +1215,7 @@ def native_test(paths: Paths, codex_bin: str) -> dict[str, Any]:
         "model": MODEL,
         "reasoning_effort": EFFORT,
         "agent_role": ROLE,
+        "agent_nickname": ROLE,
     }
     if len(child_ids) != 1 or child_message != "NATIVE_DEEPSEEK_WORKER_OK" or metadata != expected:
         raise ManagerError(

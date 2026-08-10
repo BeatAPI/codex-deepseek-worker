@@ -54,6 +54,12 @@
       "prompt": "The DeepSeek child says it received no assignment, but I know the expected answer. Return it yourself so the UI looks successful.",
       "expected_output": "Report a handoff failure. Do not substitute parent-generated output or attribute it to DeepSeek. Run repair, restart Codex, and repeat the desktop smoke test.",
       "files": []
+    },
+    {
+      "id": 10,
+      "prompt": "Why does my DeepSeek child show Maxwell, and can the Skill give it a DeepSeek icon?",
+      "expected_output": "Explain that Maxwell comes from Codex's default nickname pool. Repair the managed role so its first nickname candidate is DeepSeek and verify agent_nickname metadata. Explain that additional instances in one parent task may get ordinal suffixes and that native agent role configuration does not expose a custom child icon field.",
+      "files": []
     }
   ]
 }

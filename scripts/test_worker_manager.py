@@ -166,6 +166,7 @@ class ManagerTests(unittest.TestCase):
         text = manager.expected_agent_text()
         self.assertEqual(manager.ROLE, "DeepSeek")
         self.assertIn('name = "DeepSeek"', text)
+        self.assertIn('nickname_candidates = ["DeepSeek"]', text)
         self.assertNotIn("DeepSeekWorker", text)
         self.assertIn('model_provider = "deepseek"', text)
         self.assertIn('model_reasoning_effort = "high"', text)
@@ -174,6 +175,12 @@ class ManagerTests(unittest.TestCase):
         self.assertIn("WORKER_REPORT", text)
         self.assertIn("preserve unrelated user changes", text)
         self.assertIn("distinguish verified results from assumptions", text)
+
+    def test_legacy_agent_contract_remains_byte_compatible_for_migration(self) -> None:
+        self.assertNotIn(
+            "nickname_candidates",
+            manager.expected_legacy_agent_text(),
+        )
 
     def test_agent_contract_forbids_parent_fallback_after_missing_assignment(self) -> None:
         text = manager.expected_agent_text()
@@ -510,6 +517,7 @@ class ManagerTests(unittest.TestCase):
                 "model": manager.MODEL,
                 "reasoning_effort": manager.EFFORT,
                 "agent_role": manager.ROLE,
+                "agent_nickname": manager.ROLE,
             }
             with mock.patch.object(manager.subprocess, "run", return_value=proc) as run, mock.patch.object(
                 manager, "wait_for_child_metadata", return_value=expected
@@ -589,6 +597,7 @@ class ManagerTests(unittest.TestCase):
                 "model": manager.MODEL,
                 "reasoning_effort": manager.EFFORT,
                 "agent_role": manager.ROLE,
+                "agent_nickname": manager.ROLE,
             }
             with mock.patch.object(manager.subprocess, "run", return_value=proc), mock.patch.object(
                 manager,
@@ -937,10 +946,10 @@ class ManagerTests(unittest.TestCase):
     def test_repair_upgrades_manager_owned_deepseek_agent_contract(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             paths = manager.resolve_paths(directory)
-            old_contract = (
-                " The parent must accept only this subagent's returned task result; if it reports a missing assignment, the parent must not substitute its own output and must report the handoff failure."
+            old_text = manager.expected_agent_text().replace(
+                'nickname_candidates = ["DeepSeek"]\n',
+                "",
             )
-            old_text = manager.expected_agent_text().replace(old_contract, "")
             paths.config.parent.mkdir(parents=True, exist_ok=True)
             paths.config.write_text('model = "gpt-5.6-sol"\n')
             paths.agent.parent.mkdir(parents=True, exist_ok=True)
