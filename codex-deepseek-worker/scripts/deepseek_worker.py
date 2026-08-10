@@ -524,13 +524,18 @@ def remove_table_bool_if_value(text: str, table: str, key: str, expected: bool) 
 
 def agent_text(role: str) -> str:
     description_noun = "worker" if role == LEGACY_ROLE else "subagent"
+    handoff_contract = (
+        ""
+        if role == LEGACY_ROLE
+        else " The parent must accept only this subagent's returned task result; if it reports a missing assignment, the parent must not substitute its own output and must report the handoff failure."
+    )
     identity = (
         "DeepSeek Worker, a focused text-only coding worker"
         if role == LEGACY_ROLE
         else "DeepSeek, a focused text-only coding subagent"
     )
     return f'''name = "{role}"
-description = "Text-only DeepSeek {description_noun} for bounded repository research, implementation, tests, review, and documentation. Use it when parallel capacity, long-context reading, or an independent model pass adds value. Do not use it for visual inspection or final high-risk decisions."
+description = "Text-only DeepSeek {description_noun} for bounded repository research, implementation, tests, review, and documentation. Use it when parallel capacity, long-context reading, or an independent model pass adds value. Do not use it for visual inspection or final high-risk decisions.{handoff_contract}"
 model = "{MODEL}"
 model_provider = "{PROVIDER}"
 model_reasoning_effort = "{EFFORT}"
@@ -699,6 +704,7 @@ def load_base_catalog(codex_bin: str, paths: Paths, config: dict[str, Any]) -> d
 
 def merged_catalog(base: dict[str, Any], deepseek_model: dict[str, Any], parent_model: str) -> dict[str, Any]:
     models = [model for model in base.get("models", []) if model.get("slug") != MODEL]
+    deepseek_model["multi_agent_version"] = PARENT_MULTI_AGENT_VERSION
     models.append(deepseek_model)
     parent_found = False
     for model in models:
@@ -755,8 +761,15 @@ def install(paths: Paths, codex_bin: str) -> dict[str, Any]:
     compatible, conflicts = compatible_existing(unmanaged_parsed, paths)
     if not compatible:
         raise ManagerError("conflict", "Found incompatible existing DeepSeek configuration.", {"fields": conflicts})
+    agent_contract_upgradable = False
     if paths.agent.is_file() and paths.agent.read_text() != expected_agent_text():
-        raise ManagerError("conflict", "The existing DeepSeek agent file differs from the managed configuration.", {"path": str(paths.agent)})
+        current_agent_hash = sha256_text_file(paths.agent)
+        agent_contract_upgradable = bool(
+            previous_manifest.get("managed_agent_file")
+            and current_agent_hash == previous_manifest.get("agent_sha256")
+        )
+        if not agent_contract_upgradable:
+            raise ManagerError("conflict", "The existing DeepSeek agent file differs from the managed configuration.", {"path": str(paths.agent)})
     legacy_agent_migratable = False
     if paths.legacy_agent.is_file():
         legacy_content = paths.legacy_agent.read_text()
@@ -863,7 +876,7 @@ def install(paths: Paths, codex_bin: str) -> dict[str, Any]:
         json.loads(catalog_bytes)
 
         atomic_write(paths.catalog, catalog_bytes)
-        if not paths.agent.is_file():
+        if not paths.agent.is_file() or agent_contract_upgradable:
             atomic_write(paths.agent, expected_agent_text().encode(), mode=0o644)
         atomic_write(paths.config, new_config.encode())
         if legacy_agent_migratable and paths.legacy_agent.is_file():
@@ -896,6 +909,7 @@ def install(paths: Paths, codex_bin: str) -> dict[str, Any]:
             "adopted_existing": adopted_existing,
             "parent_model": parent_model,
             "parent_multi_agent_version": PARENT_MULTI_AGENT_VERSION,
+            "deepseek_multi_agent_version": PARENT_MULTI_AGENT_VERSION,
             "parent_original_multi_agent_version": parent_original_version,
             "managed_multi_agent_v2": managed_multi_agent_v2,
             "previous_multi_agent_v2": previous_multi_agent_v2,
@@ -909,6 +923,7 @@ def install(paths: Paths, codex_bin: str) -> dict[str, Any]:
             "backup": str(backup),
             "adopted_existing": adopted_existing,
             "migrated_role": legacy_agent_migratable,
+            "upgraded_agent_contract": agent_contract_upgradable,
         }
     except Exception:
         restore_backup(paths, backup)
@@ -956,6 +971,16 @@ def static_status(paths: Paths, codex_bin: str | None = None) -> dict[str, Any]:
         try:
             data = json.loads(paths.catalog.read_text())
             checks["model_registered"] = any(item.get("slug") == MODEL for item in data.get("models", []))
+            deepseek_entry = next(
+                (item for item in data.get("models", []) if item.get("slug") == MODEL),
+                None,
+            )
+            checks["deepseek_multi_agent_version"] = (
+                deepseek_entry.get("multi_agent_version") if deepseek_entry else None
+            )
+            checks["deepseek_uses_plaintext_v1"] = (
+                checks["deepseek_multi_agent_version"] == PARENT_MULTI_AGENT_VERSION
+            )
             parent_entry = next(
                 (item for item in data.get("models", []) if parent_model and item.get("slug") == parent_model),
                 None,
@@ -968,10 +993,12 @@ def static_status(paths: Paths, codex_bin: str | None = None) -> dict[str, Any]:
             )
         except (OSError, json.JSONDecodeError):
             checks["model_registered"] = False
+            checks["deepseek_uses_plaintext_v1"] = False
             checks["parent_uses_plaintext_v1"] = False
             errors.append("Could not parse the model catalog.")
     else:
         checks["model_registered"] = False
+        checks["deepseek_uses_plaintext_v1"] = False
         checks["parent_uses_plaintext_v1"] = False
     checks["agent_content_valid"] = paths.agent.is_file() and paths.agent.read_text() == expected_agent_text()
 
@@ -990,6 +1017,7 @@ def static_status(paths: Paths, codex_bin: str | None = None) -> dict[str, Any]:
         "provider_valid",
         "catalog_selected",
         "model_registered",
+        "deepseek_uses_plaintext_v1",
         "parent_model_configured",
         "parent_uses_plaintext_v1",
         "desktop_multi_agent_v2_disabled",

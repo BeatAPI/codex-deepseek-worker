@@ -128,7 +128,26 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(by_slug["gpt-test"]["name"], "OpenAI test")
         self.assertTrue(by_slug["gpt-5.6-sol"]["old"])
         self.assertEqual(by_slug["gpt-5.6-sol"]["multi_agent_version"], manager.PARENT_MULTI_AGENT_VERSION)
-        self.assertEqual(by_slug[manager.MODEL], {"slug": manager.MODEL, "new": True})
+        self.assertEqual(
+            by_slug[manager.MODEL],
+            {
+                "slug": manager.MODEL,
+                "new": True,
+                "multi_agent_version": manager.PARENT_MULTI_AGENT_VERSION,
+            },
+        )
+
+    def test_merged_catalog_pins_deepseek_child_v1_for_desktop_handoff(self) -> None:
+        merged = manager.merged_catalog(
+            {"models": [{"slug": "gpt-5.6-sol"}]},
+            {"slug": manager.MODEL, "multi_agent_version": "v2"},
+            "gpt-5.6-sol",
+        )
+        by_slug = {item["slug"]: item for item in merged["models"]}
+        self.assertEqual(
+            by_slug[manager.MODEL]["multi_agent_version"],
+            manager.PARENT_MULTI_AGENT_VERSION,
+        )
 
     def test_merged_catalog_errors_when_parent_is_missing(self) -> None:
         with self.assertRaises(manager.ManagerError) as raised:
@@ -155,6 +174,11 @@ class ManagerTests(unittest.TestCase):
         self.assertIn("WORKER_REPORT", text)
         self.assertIn("preserve unrelated user changes", text)
         self.assertIn("distinguish verified results from assumptions", text)
+
+    def test_agent_contract_forbids_parent_fallback_after_missing_assignment(self) -> None:
+        text = manager.expected_agent_text()
+        self.assertIn("must not substitute its own output", text)
+        self.assertIn("report the handoff failure", text)
 
     def test_disable_accepts_windows_line_endings_in_managed_agent(self) -> None:
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(
@@ -359,7 +383,10 @@ class ManagerTests(unittest.TestCase):
                     {
                         "models": [
                             {"slug": "gpt-5.6-sol", "multi_agent_version": manager.PARENT_MULTI_AGENT_VERSION},
-                            {"slug": manager.MODEL},
+                            {
+                                "slug": manager.MODEL,
+                                "multi_agent_version": manager.PARENT_MULTI_AGENT_VERSION,
+                            },
                         ]
                     }
                 )
@@ -370,9 +397,45 @@ class ManagerTests(unittest.TestCase):
             status = manager.static_status(paths, "desktop-codex")
             self.assertEqual(status["status"], "configured")
             self.assertTrue(status["checks"]["parent_uses_plaintext_v1"])
+            self.assertTrue(status["checks"]["deepseek_uses_plaintext_v1"])
             self.assertTrue(status["checks"]["desktop_multi_agent_v2_disabled"])
             self.assertTrue(status["checks"]["desktop_codex_detected"])
             self.assertTrue(status["checks"]["provider_valid"])
+
+    def test_static_status_rejects_deepseek_child_v2_handoff(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            manager,
+            "credential_has_key",
+            return_value=True,
+        ), mock.patch.object(manager, "codex_version_text", return_value="codex-cli test"):
+            paths = manager.resolve_paths(directory)
+            paths.config.parent.mkdir(parents=True, exist_ok=True)
+            paths.config.write_text(
+                'model = "gpt-5.6-sol"\n'
+                f"model_catalog_json = {manager.toml_string(str(paths.catalog))}\n"
+                "[features]\n"
+                "multi_agent_v2 = false\n"
+                + manager.managed_provider_block()
+            )
+            paths.catalog.write_text(
+                json.dumps(
+                    {
+                        "models": [
+                            {
+                                "slug": "gpt-5.6-sol",
+                                "multi_agent_version": manager.PARENT_MULTI_AGENT_VERSION,
+                            },
+                            {"slug": manager.MODEL, "multi_agent_version": "v2"},
+                        ]
+                    }
+                )
+            )
+            paths.agent.parent.mkdir(parents=True, exist_ok=True)
+            paths.agent.write_text(manager.expected_agent_text())
+            manager.write_manifest(paths, {"schema_version": 4})
+            status = manager.static_status(paths, "desktop-codex")
+            self.assertEqual(status["status"], "partial")
+            self.assertFalse(status["checks"]["deepseek_uses_plaintext_v1"])
 
     def test_status_reports_legacy_role_migration_required(self) -> None:
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(
@@ -870,6 +933,43 @@ class ManagerTests(unittest.TestCase):
             self.assertEqual(manifest["role"], "DeepSeek")
             self.assertTrue(manifest["legacy_agent_migrated"])
             self.assertTrue((Path(result["backup"]) / "DeepSeekWorker.toml").is_file())
+
+    def test_repair_upgrades_manager_owned_deepseek_agent_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            paths = manager.resolve_paths(directory)
+            old_contract = (
+                " The parent must accept only this subagent's returned task result; if it reports a missing assignment, the parent must not substitute its own output and must report the handoff failure."
+            )
+            old_text = manager.expected_agent_text().replace(old_contract, "")
+            paths.config.parent.mkdir(parents=True, exist_ok=True)
+            paths.config.write_text('model = "gpt-5.6-sol"\n')
+            paths.agent.parent.mkdir(parents=True, exist_ok=True)
+            paths.agent.write_text(old_text)
+            manager.write_manifest(
+                paths,
+                {
+                    "schema_version": 4,
+                    "managed_agent_file": True,
+                    "agent_preexisted": False,
+                    "agent_sha256": manager.sha256_bytes(old_text.encode()),
+                },
+            )
+            with mock.patch.object(
+                manager,
+                "fetch_official_deepseek_model",
+                return_value={"slug": manager.MODEL, "multi_agent_version": "v2"},
+            ), mock.patch.object(
+                manager,
+                "load_base_catalog",
+                return_value={"models": [{"slug": "gpt-5.6-sol"}]},
+            ):
+                result = manager.install(paths, "codex")
+            self.assertTrue(result["upgraded_agent_contract"])
+            self.assertEqual(paths.agent.read_text(), manager.expected_agent_text())
+            self.assertEqual(
+                manager.read_manifest(paths)["deepseek_multi_agent_version"],
+                manager.PARENT_MULTI_AGENT_VERSION,
+            )
 
     def test_failed_role_migration_restores_legacy_agent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

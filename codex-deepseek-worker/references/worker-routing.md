@@ -34,3 +34,8 @@ Do not ask the worker to “fix everything” or infer permission for broad refa
 ## Review the result
 
 The parent agent must inspect the diff and verification evidence before accepting the work. Compare claims with files, tests, and command output. Treat missing evidence, skipped tests, and inferred behavior as open items.
+
+The returned content must come from the DeepSeek child. A completed child that says
+it did not receive an assignment is a handoff failure. Do not retry by writing the
+answer in the parent task, and do not attribute parent-generated content to DeepSeek.
+Run `repair`, restart Desktop, and repeat a minimal exact-response smoke test.

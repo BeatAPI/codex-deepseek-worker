@@ -36,7 +36,7 @@ unrecognized or user-modified legacy file is reported as a conflict and preserve
 
 On macOS, the manager discovers the desktop app's bundled Codex runtime from the standard app locations. It does not search `PATH` or trust environment-variable install roots. On Windows, the caller must pass the exact trusted desktop runtime path explicitly with `--codex-bin`; the manager never automatically executes a discovered file.
 
-The manager reads the active parent model, disables `features.multi_agent_v2`, and sets that parent model's catalog entry to `multi_agent_version = "v1"`. This is required by the currently validated cross-provider plaintext routing path. Run `repair` whenever the parent model changes.
+The manager reads the active parent model, disables `features.multi_agent_v2`, and sets both the parent model and `deepseek-v4-flash` catalog entries to `multi_agent_version = "v1"`. Current Desktop collaboration can select the handoff protocol from the target model; leaving DeepSeek on v2 can encrypt the cross-provider assignment even when the parent is v1. Run `repair` whenever the parent model changes or either catalog entry drifts.
 
 Daily tasks must be delegated by the parent Codex agent:
 
@@ -62,6 +62,11 @@ If the current task does not recognize the custom role, restart Codex and open a
 2. the exact child response `NATIVE_DEEPSEEK_WORKER_OK`.
 
 A model self-report or a successful direct API call alone is insufficient.
+
+After restarting Desktop, a UI smoke test must also distinguish the child's result
+from the parent's final response. A child task that completes with “missing
+assignment” is a failed handoff even if the parent later prints the requested token.
+The parent must surface that failure instead of substituting its own output.
 
 ## Credentials
 
