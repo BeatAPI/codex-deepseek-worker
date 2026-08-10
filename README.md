@@ -25,6 +25,7 @@ The subagent is deliberately not the final decision-maker. Its agent contract re
 - Secure credentials: macOS Keychain or Windows Credential Manager
 - Transactional config changes with backups and rollback
 - Direct-provider and native-routing verification
+- Plaintext V1 handoff on both the parent and DeepSeek model catalog entries
 - Parent-model preservation: the top-level Codex model and login are not replaced
 
 V1 supports text tasks only. It does not claim image, screenshot, video, or multimodal support.
@@ -54,6 +55,16 @@ The Skill checks the current state before writing anything. If a credential is m
 
 After setup returns `ready`, restart Codex and open a new task so the native role is loaded.
 
+For an end-to-end desktop smoke test, send this in the new task:
+
+```text
+@DeepSeek Reply exactly DEEPSEEK_UI_OK and nothing else.
+```
+
+Open the completed child task and confirm the child itself received the assignment
+and returned `DEEPSEEK_UI_OK`. A completed child that reports a missing assignment
+is a failed handoff; the parent must not write the token or requested content itself.
+
 Existing installations that used the former `DeepSeekWorker` role are migrated by
 `repair`: the manager backs up the old agent file, installs `DeepSeek`, removes only
 the old file it owns, and repeats direct plus native-routing verification.
@@ -81,6 +92,10 @@ spawn_agent(agent_type="DeepSeek", fork_turns="none", ...)
 ```
 
 Daily work does not run the setup Skill again.
+
+Accept only the result returned by the DeepSeek child. If the child reports that it
+did not receive an assignment, report the handoff failure and run `repair`; never
+silently substitute output from the parent model and attribute it to DeepSeek.
 
 ## Management commands
 
@@ -125,6 +140,11 @@ agent_role = DeepSeek
 ```
 
 Only then does the manager return `status: ready`.
+
+The merged model catalog must also record `multi_agent_version = "v1"` for both
+the current parent model and `deepseek-v4-flash`. Pinning only the parent is not
+enough on current Desktop collaboration routing because the target model can select
+the encrypted V2 handoff path.
 
 ## Model scope
 
