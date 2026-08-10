@@ -1,0 +1,30 @@
+name: verify
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  worker-manager:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-latest
+          - windows-latest
+        python:
+          - "3.11"
+          - "3.13"
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Run worker manager tests
+        run: python scripts/test_worker_manager.py
+      - name: Compile worker manager
+        run: python -m py_compile codex-deepseek-worker/scripts/deepseek_worker.py
+      - name: Validate evaluation JSON
+        run: python -m json.tool codex-deepseek-worker/evals/evals.json

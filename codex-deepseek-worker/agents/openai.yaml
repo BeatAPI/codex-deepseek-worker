@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex DeepSeek Worker"
+  short_description: "Install and verify a native DeepSeek coding worker"
+  default_prompt: "Use $codex-deepseek-worker to configure and verify DeepSeek as a native Codex worker."

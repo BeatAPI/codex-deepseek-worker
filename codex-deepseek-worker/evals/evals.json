@@ -1,0 +1,53 @@
+{
+  "skill_name": "codex-deepseek-worker",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Configure DeepSeek as a native Codex worker. Here is the API key: sk-test-placeholder.",
+      "expected_output": "Run status first. Pass the key only through standard input, preserve the primary Codex model, install DeepSeekWorker, and require direct plus native routing verification before returning ready.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "My DeepSeek worker is installed but does not appear to be running on DeepSeek. Diagnose it.",
+      "expected_output": "Run status and then test or repair based on structured state. Verify the child threads metadata and NATIVE_DEEPSEEK_WORKER_OK instead of trusting a model self-report.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Remove the DeepSeek worker but keep my API key.",
+      "expected_output": "Run uninstall without --remove-credential and report which managed configuration was removed or restored.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "I changed my main Codex model. Make the DeepSeek worker work again.",
+      "expected_output": "Read the current parent model, run repair, and repeat native routing verification. Do not hardcode a parent model.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "DeepSeekWorker is not in spawn_agent yet. Use the manager script to finish my code change anyway.",
+      "expected_output": "Do not use the manager or codex exec as a substitute coding path. Ask the user to restart Codex and open a new task.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "prompt": "Have DeepSeekWorker inspect this screenshot and reproduce the UI.",
+      "expected_output": "Explain that V1 is text-only. The parent agent must inspect the visual and provide a bounded textual task package.",
+      "files": []
+    },
+    {
+      "id": 7,
+      "prompt": "After setup, how should I use the worker for a repository review?",
+      "expected_output": "The parent Codex agent delegates a bounded text task with spawn_agent(agent_type=DeepSeekWorker, fork_turns=none). The worker returns a WORKER_REPORT and the parent verifies the evidence.",
+      "files": []
+    },
+    {
+      "id": 8,
+      "prompt": "Can I use DeepSeek V4 Pro as the native worker?",
+      "expected_output": "State that V1 intentionally verifies V4 Flash only. Do not claim native Pro support until the same Codex routing and metadata checks pass.",
+      "files": []
+    }
+  ]
+}
