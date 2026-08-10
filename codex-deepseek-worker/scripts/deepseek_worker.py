@@ -41,7 +41,8 @@ except ImportError:  # macOS / Linux
 
 MODEL = "deepseek-v4-flash"
 PROVIDER = "deepseek"
-ROLE = "DeepSeekWorker"
+ROLE = "DeepSeek"
+LEGACY_ROLE = "DeepSeekWorker"
 EFFORT = "high"
 MIN_PYTHON = (3, 9)
 PARENT_MULTI_AGENT_VERSION = "v1"
@@ -74,6 +75,7 @@ class Paths:
     config: Path
     catalog: Path
     agent: Path
+    legacy_agent: Path
     state_dir: Path
     manifest: Path
 
@@ -85,6 +87,7 @@ def resolve_paths(codex_home: str | None) -> Paths:
         config=home / "config.toml",
         catalog=home / "models-with-deepseek.json",
         agent=home / "agents" / f"{ROLE}.toml",
+        legacy_agent=home / "agents" / f"{LEGACY_ROLE}.toml",
         state_dir=home / "codex-deepseek-worker",
         manifest=home / "codex-deepseek-worker" / "manifest.json",
     )
@@ -519,14 +522,20 @@ def remove_table_bool_if_value(text: str, table: str, key: str, expected: bool) 
     return "\n".join(kept).rstrip() + "\n"
 
 
-def expected_agent_text() -> str:
-    return f'''name = "{ROLE}"
-description = "Text-only DeepSeek worker for bounded repository research, implementation, tests, review, and documentation. Use it when parallel capacity, long-context reading, or an independent model pass adds value. Do not use it for visual inspection or final high-risk decisions."
+def agent_text(role: str) -> str:
+    description_noun = "worker" if role == LEGACY_ROLE else "subagent"
+    identity = (
+        "DeepSeek Worker, a focused text-only coding worker"
+        if role == LEGACY_ROLE
+        else "DeepSeek, a focused text-only coding subagent"
+    )
+    return f'''name = "{role}"
+description = "Text-only DeepSeek {description_noun} for bounded repository research, implementation, tests, review, and documentation. Use it when parallel capacity, long-context reading, or an independent model pass adds value. Do not use it for visual inspection or final high-risk decisions."
 model = "{MODEL}"
 model_provider = "{PROVIDER}"
 model_reasoning_effort = "{EFFORT}"
 developer_instructions = """
-You are DeepSeek Worker, a focused text-only coding worker managed by a parent Codex agent.
+You are {identity} managed by a parent Codex agent.
 
 Work only on the bounded task in the assignment. Inspect relevant files before editing, preserve unrelated user changes, and avoid broad refactors unless explicitly requested.
 Use available tools when needed. Run the narrowest useful verification and distinguish verified results from assumptions.
@@ -537,6 +546,14 @@ Do not make final product, security, legal, financial, deployment, or publishing
 Finish with a compact WORKER_REPORT containing: summary, files_changed, verification, risks, and follow_ups. Use none when a field has no entries.
 """
 '''
+
+
+def expected_agent_text() -> str:
+    return agent_text(ROLE)
+
+
+def expected_legacy_agent_text() -> str:
+    return agent_text(LEGACY_ROLE)
 
 
 def managed_provider_block() -> str:
@@ -606,12 +623,18 @@ def compatible_existing(parsed: dict[str, Any], paths: Paths) -> tuple[bool, lis
     issues: list[str] = []
     provider = (parsed.get("model_providers") or {}).get(PROVIDER)
     issues.extend(provider_conflicts(provider))
-    agent = (parsed.get("agents") or {}).get(ROLE)
-    if agent:
-        if set(agent) - {"description", "config_file"}:
-            issues.append(f"agents.{ROLE}")
-        if Path(agent.get("config_file", "")).expanduser() != paths.agent:
-            issues.append(f"agents.{ROLE}.config_file")
+    agents = parsed.get("agents") or {}
+    for role in (ROLE, LEGACY_ROLE):
+        agent = agents.get(role)
+        if agent:
+            if set(agent) - {"description", "config_file"}:
+                issues.append(f"agents.{role}")
+            config_file = Path(agent.get("config_file", "")).expanduser()
+            allowed_paths = {paths.agent}
+            if role == LEGACY_ROLE:
+                allowed_paths.add(paths.legacy_agent)
+            if config_file not in allowed_paths:
+                issues.append(f"agents.{role}.config_file")
     return not issues, issues
 
 
@@ -700,7 +723,7 @@ def make_backup(paths: Paths) -> Path:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     backup = paths.state_dir / "backups" / stamp
     backup.mkdir(parents=True, exist_ok=False)
-    for source in (paths.config, paths.catalog, paths.agent, paths.manifest):
+    for source in (paths.config, paths.catalog, paths.agent, paths.legacy_agent, paths.manifest):
         if source.is_file():
             shutil.copy2(source, backup / source.name)
     return backup
@@ -733,10 +756,28 @@ def install(paths: Paths, codex_bin: str) -> dict[str, Any]:
     if not compatible:
         raise ManagerError("conflict", "Found incompatible existing DeepSeek configuration.", {"fields": conflicts})
     if paths.agent.is_file() and paths.agent.read_text() != expected_agent_text():
-        raise ManagerError("conflict", "The existing DeepSeek worker file differs from the managed configuration.", {"path": str(paths.agent)})
-    legacy_role_present = bool((unmanaged_parsed.get("agents") or {}).get(ROLE))
-    if legacy_role_present:
-        unmanaged_config = remove_toml_table(unmanaged_config, f"agents.{ROLE}")
+        raise ManagerError("conflict", "The existing DeepSeek agent file differs from the managed configuration.", {"path": str(paths.agent)})
+    legacy_agent_migratable = False
+    if paths.legacy_agent.is_file():
+        legacy_content = paths.legacy_agent.read_text()
+        legacy_hash = sha256_text_file(paths.legacy_agent)
+        previous_managed_legacy = bool(
+            previous_manifest.get("managed_agent_file")
+            and legacy_hash == previous_manifest.get("agent_sha256")
+        )
+        exact_legacy_content = legacy_content == expected_legacy_agent_text()
+        if not previous_managed_legacy and not (not previous_manifest and exact_legacy_content):
+            raise ManagerError(
+                "conflict",
+                "The existing DeepSeekWorker file is not owned by this manager; migration was refused.",
+                {"path": str(paths.legacy_agent)},
+            )
+        legacy_agent_migratable = True
+    legacy_role_present = False
+    for registered_role in (ROLE, LEGACY_ROLE):
+        if (unmanaged_parsed.get("agents") or {}).get(registered_role):
+            unmanaged_config = remove_toml_table(unmanaged_config, f"agents.{registered_role}")
+            legacy_role_present = True
         unmanaged_parsed = parse_toml_text(unmanaged_config) if unmanaged_config.strip() else {}
 
     catalog_preexisted_now = paths.catalog.is_file()
@@ -825,6 +866,8 @@ def install(paths: Paths, codex_bin: str) -> dict[str, Any]:
         if not paths.agent.is_file():
             atomic_write(paths.agent, expected_agent_text().encode(), mode=0o644)
         atomic_write(paths.config, new_config.encode())
+        if legacy_agent_migratable and paths.legacy_agent.is_file():
+            paths.legacy_agent.unlink()
 
         previous_agent_managed = bool(previous_manifest.get("managed_agent_file"))
         managed_agent_file = previous_agent_managed or not agent_preexisted_now
@@ -835,13 +878,17 @@ def install(paths: Paths, codex_bin: str) -> dict[str, Any]:
                 catalog_original_backup = str(candidate)
         adopted_existing = provider_exists or agent_preexisted or catalog_preexisted
         manifest = {
-            "schema_version": 3,
+            "schema_version": 4,
             "installed_at": datetime.now().isoformat(timespec="seconds"),
             "backup": str(backup),
             "previous_model_catalog_json": previous_catalog_value,
             "managed_catalog_selection": managed_catalog_selection,
             "managed_provider_block": provider_marker_present or not provider_exists,
             "managed_agent_file": managed_agent_file,
+            "role": ROLE,
+            "legacy_agent_migrated": bool(
+                previous_manifest.get("legacy_agent_migrated") or legacy_agent_migratable
+            ),
             "catalog_preexisted": catalog_preexisted,
             "catalog_original_backup": catalog_original_backup,
             "agent_preexisted": agent_preexisted,
@@ -858,7 +905,11 @@ def install(paths: Paths, codex_bin: str) -> dict[str, Any]:
             "agent_sha256": sha256_bytes(expected_agent_text().encode()),
         }
         write_manifest(paths, manifest)
-        return {"backup": str(backup), "adopted_existing": adopted_existing}
+        return {
+            "backup": str(backup),
+            "adopted_existing": adopted_existing,
+            "migrated_role": legacy_agent_migratable,
+        }
     except Exception:
         restore_backup(paths, backup)
         raise
@@ -869,6 +920,9 @@ def static_status(paths: Paths, codex_bin: str | None = None) -> dict[str, Any]:
         "config_exists": paths.config.is_file(),
         "catalog_exists": paths.catalog.is_file(),
         "agent_exists": paths.agent.is_file(),
+        "legacy_agent_exists": paths.legacy_agent.is_file(),
+        "role_migration_required": paths.legacy_agent.is_file(),
+        "role_migration_complete": not paths.legacy_agent.is_file(),
         "credential_backend": credential_backend(),
         "credential_present": credential_has_key(),
         "manifest_exists": paths.manifest.is_file(),
@@ -883,7 +937,8 @@ def static_status(paths: Paths, codex_bin: str | None = None) -> dict[str, Any]:
             checks["config_valid"] = False
             errors.append(str(exc))
     provider = (parsed.get("model_providers") or {}).get(PROVIDER)
-    role = (parsed.get("agents") or {}).get(ROLE)
+    registered_roles = parsed.get("agents") or {}
+    role = registered_roles.get(ROLE) or registered_roles.get(LEGACY_ROLE)
     checks["provider_registered"] = bool(provider)
     checks["provider_valid"] = bool(provider) and not provider_conflicts(provider)
     checks["agent_discovery"] = "standalone"
@@ -942,6 +997,7 @@ def static_status(paths: Paths, codex_bin: str | None = None) -> dict[str, Any]:
         "credential_present",
         "manifest_exists",
         "legacy_role_registration_absent",
+        "role_migration_complete",
         "desktop_codex_detected",
     )
     ready = all(checks.get(key) is True for key in required)
@@ -1144,10 +1200,11 @@ def run_tests(paths: Paths, codex_bin: str) -> dict[str, Any]:
 
 
 def restore_backup(paths: Paths, backup: Path) -> None:
-    for target in (paths.config, paths.catalog, paths.agent, paths.manifest):
+    for target in (paths.config, paths.catalog, paths.agent, paths.legacy_agent, paths.manifest):
         source = backup / target.name
         if source.is_file():
-            atomic_write(target, source.read_bytes(), mode=0o644 if target == paths.agent else 0o600)
+            agent_mode = target in (paths.agent, paths.legacy_agent)
+            atomic_write(target, source.read_bytes(), mode=0o644 if agent_mode else 0o600)
         elif target.is_file():
             target.unlink()
 
@@ -1190,12 +1247,15 @@ def disable(paths: Paths) -> dict[str, Any]:
     if not paths.manifest.is_file():
         raise ManagerError("not_managed", "No managed manifest was found; existing configuration was not modified.")
     manifest = read_manifest(paths)
-    if manifest.get("managed_agent_file") and paths.agent.is_file():
-        if sha256_text_file(paths.agent) != manifest.get("agent_sha256"):
+    managed_agent = paths.agent
+    if not managed_agent.is_file() and manifest.get("schema_version", 1) < 4:
+        managed_agent = paths.legacy_agent
+    if manifest.get("managed_agent_file") and managed_agent.is_file():
+        if sha256_text_file(managed_agent) != manifest.get("agent_sha256"):
             raise ManagerError(
                 "conflict",
-                "The managed DeepSeek worker file was modified; disable was refused.",
-                {"path": str(paths.agent)},
+                "The managed DeepSeek agent file was modified; disable was refused.",
+                {"path": str(managed_agent)},
             )
     changed = False
     if paths.config.is_file():
@@ -1216,8 +1276,8 @@ def disable(paths: Paths) -> dict[str, Any]:
             parse_toml_text(updated)
             atomic_write(paths.config, updated.encode())
             changed = True
-    if manifest.get("managed_agent_file") and paths.agent.is_file():
-        paths.agent.unlink()
+    if manifest.get("managed_agent_file") and managed_agent.is_file():
+        managed_agent.unlink()
         changed = True
     return result(
         "disabled",

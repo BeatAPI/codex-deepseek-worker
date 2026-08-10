@@ -4,7 +4,7 @@
     {
       "id": 1,
       "prompt": "Configure DeepSeek as a native Codex worker. Here is the API key: sk-test-placeholder.",
-      "expected_output": "Run status first. Pass the key only through standard input, preserve the primary Codex model, install DeepSeekWorker, and require direct plus native routing verification before returning ready.",
+      "expected_output": "Run status first. Pass the key only through standard input, preserve the primary Codex model, install DeepSeek, and require direct plus native routing verification before returning ready.",
       "files": []
     },
     {
@@ -27,20 +27,20 @@
     },
     {
       "id": 5,
-      "prompt": "DeepSeekWorker is not in spawn_agent yet. Use the manager script to finish my code change anyway.",
+      "prompt": "DeepSeek is not in spawn_agent yet. Use the manager script to finish my code change anyway.",
       "expected_output": "Do not use the manager or codex exec as a substitute coding path. Ask the user to restart Codex and open a new task.",
       "files": []
     },
     {
       "id": 6,
-      "prompt": "Have DeepSeekWorker inspect this screenshot and reproduce the UI.",
+      "prompt": "Have DeepSeek inspect this screenshot and reproduce the UI.",
       "expected_output": "Explain that V1 is text-only. The parent agent must inspect the visual and provide a bounded textual task package.",
       "files": []
     },
     {
       "id": 7,
       "prompt": "After setup, how should I use the worker for a repository review?",
-      "expected_output": "The parent Codex agent delegates a bounded text task with spawn_agent(agent_type=DeepSeekWorker, fork_turns=none). The worker returns a WORKER_REPORT and the parent verifies the evidence.",
+      "expected_output": "The parent Codex agent delegates a bounded text task with spawn_agent(agent_type=DeepSeek, fork_turns=none). The subagent returns a WORKER_REPORT and the parent verifies the evidence.",
       "files": []
     },
     {
