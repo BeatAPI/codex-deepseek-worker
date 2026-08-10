@@ -18,11 +18,19 @@ The default `CODEX_HOME` is `~/.codex`:
 
 - Codex config: `$CODEX_HOME/config.toml`
 - Merged model catalog: `$CODEX_HOME/models-with-deepseek.json`
-- Worker role: `$CODEX_HOME/agents/DeepSeekWorker.toml`
+- Subagent role: `$CODEX_HOME/agents/DeepSeek.toml`
 - Manifest and backups: `$CODEX_HOME/codex-deepseek-worker/`
 - Credential target: `codex-deepseek-worker-api-key`
 
 The manager does not change the top-level `model` or `model_provider`.
+
+## Role-name migration
+
+Version 1 originally installed `$CODEX_HOME/agents/DeepSeekWorker.toml`. A current
+`repair` recognizes that file only when its content hash matches the manager's
+manifest, includes it in the transaction backup, replaces it with
+`$CODEX_HOME/agents/DeepSeek.toml`, and verifies the new `DeepSeek` role. An
+unrecognized or user-modified legacy file is reported as a conflict and preserved.
 
 ## Native routing
 
@@ -33,7 +41,7 @@ The manager reads the active parent model, disables `features.multi_agent_v2`, a
 Daily tasks must be delegated by the parent Codex agent:
 
 ```text
-spawn_agent(agent_type="DeepSeekWorker", fork_turns="none", ...)
+spawn_agent(agent_type="DeepSeek", fork_turns="none", ...)
 ```
 
 If the current task does not recognize the custom role, restart Codex and open a new task. The management script is not a fallback coding agent.
@@ -48,7 +56,7 @@ If the current task does not recognize the custom role, restart Codex and open a
    model_provider = deepseek
    model = deepseek-v4-flash
    reasoning_effort = high
-   agent_role = DeepSeekWorker
+   agent_role = DeepSeek
    ```
 
 2. the exact child response `NATIVE_DEEPSEEK_WORKER_OK`.
@@ -67,4 +75,4 @@ Do not silently overwrite incompatible existing DeepSeek provider or role config
 
 ## Visual inputs
 
-`DeepSeekWorker` is text-only in V1. The parent agent must inspect images, screenshots, or video and provide only the relevant textual facts. The worker must not imply that it saw the original visual input.
+`DeepSeek` is text-only in V1. The parent agent must inspect images, screenshots, or video and provide only the relevant textual facts. The subagent must not imply that it saw the original visual input.

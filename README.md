@@ -1,4 +1,4 @@
-# Codex DeepSeek Worker
+# Codex DeepSeek
 
 Run DeepSeek V4 Flash as a native text-only worker inside Codex while keeping your existing Codex model as the orchestrator.
 
@@ -6,7 +6,7 @@ This project is for developers who want more parallel coding capacity, a low-cos
 
 ## Why a worker instead of a model switch?
 
-Codex remains responsible for task decomposition, visual inputs, integration decisions, and final verification. `DeepSeekWorker` receives bounded text tasks such as:
+Codex remains responsible for task decomposition, visual inputs, integration decisions, and final verification. `DeepSeek` receives bounded text tasks such as:
 
 - exploring a large repository and returning evidence;
 - implementing one isolated change;
@@ -14,11 +14,11 @@ Codex remains responsible for task decomposition, visual inputs, integration dec
 - reviewing a diff with a second model;
 - drafting technical documentation from source files.
 
-The worker is deliberately not the final decision-maker. Its agent contract requires a compact `WORKER_REPORT` with changed files, verification evidence, risks, and follow-ups.
+The subagent is deliberately not the final decision-maker. Its agent contract requires a compact `WORKER_REPORT` with changed files, verification evidence, risks, and follow-ups.
 
 ## What V1 installs
 
-- Native Codex role: `DeepSeekWorker`
+- Native Codex role: `DeepSeek`
 - Model: `deepseek-v4-flash`
 - Provider: official DeepSeek API
 - Reasoning effort: `high`
@@ -54,26 +54,30 @@ The Skill checks the current state before writing anything. If a credential is m
 
 After setup returns `ready`, restart Codex and open a new task so the native role is loaded.
 
+Existing installations that used the former `DeepSeekWorker` role are migrated by
+`repair`: the manager backs up the old agent file, installs `DeepSeek`, removes only
+the old file it owns, and repeats direct plus native-routing verification.
+
 ## Use the worker
 
 Ask the parent Codex agent to delegate a bounded task:
 
 ```text
-Use DeepSeekWorker to inspect the authentication module, identify the failure path,
+Use DeepSeek to inspect the authentication module, identify the failure path,
 and return an evidence-based fix recommendation. Do not edit files.
 ```
 
 For implementation:
 
 ```text
-Use DeepSeekWorker to implement the approved parser change and run the focused parser tests.
+Use DeepSeek to implement the approved parser change and run the focused parser tests.
 Return the diff summary, verification, risks, and follow-ups to the parent agent.
 ```
 
 Codex delegates through the native agent mechanism:
 
 ```text
-spawn_agent(agent_type="DeepSeekWorker", fork_turns="none", ...)
+spawn_agent(agent_type="DeepSeek", fork_turns="none", ...)
 ```
 
 Daily work does not run the setup Skill again.
@@ -117,7 +121,7 @@ A successful direct API call is not enough. Native verification must confirm bot
 model_provider = deepseek
 model = deepseek-v4-flash
 reasoning_effort = high
-agent_role = DeepSeekWorker
+agent_role = DeepSeek
 ```
 
 Only then does the manager return `status: ready`.
@@ -146,7 +150,7 @@ python3 /path/to/skill-creator/scripts/quick_validate.py codex-deepseek-worker
 
 ## Project ownership
 
-Codex DeepSeek Worker is an open-source developer tool maintained by [BeatAPI](https://beatapi.io). It does not require a BeatAPI account or API key and is not affiliated with or endorsed by OpenAI or DeepSeek.
+Codex DeepSeek is an open-source developer tool maintained by [BeatAPI](https://beatapi.io). It does not require a BeatAPI account or API key and is not affiliated with or endorsed by OpenAI or DeepSeek.
 
 ## License
 

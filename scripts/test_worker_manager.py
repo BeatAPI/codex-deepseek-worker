@@ -145,7 +145,9 @@ class ManagerTests(unittest.TestCase):
 
     def test_agent_is_standalone_text_only_high_reasoning(self) -> None:
         text = manager.expected_agent_text()
-        self.assertEqual(manager.ROLE, "DeepSeekWorker")
+        self.assertEqual(manager.ROLE, "DeepSeek")
+        self.assertIn('name = "DeepSeek"', text)
+        self.assertNotIn("DeepSeekWorker", text)
         self.assertIn('model_provider = "deepseek"', text)
         self.assertIn('model_reasoning_effort = "high"', text)
         self.assertIn("text-only", text)
@@ -177,6 +179,28 @@ class ManagerTests(unittest.TestCase):
             result = manager.disable(paths)
             self.assertTrue(result["changed"])
             self.assertFalse(paths.agent.exists())
+
+    def test_disable_removes_managed_legacy_agent_before_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            manager,
+            "credential_has_key",
+            return_value=False,
+        ):
+            paths = manager.resolve_paths(directory)
+            legacy_text = manager.expected_legacy_agent_text()
+            paths.legacy_agent.parent.mkdir(parents=True, exist_ok=True)
+            paths.legacy_agent.write_text(legacy_text)
+            manager.write_manifest(
+                paths,
+                {
+                    "schema_version": 3,
+                    "managed_agent_file": True,
+                    "agent_sha256": manager.sha256_bytes(legacy_text.encode()),
+                },
+            )
+            result = manager.disable(paths)
+            self.assertTrue(result["changed"])
+            self.assertFalse(paths.legacy_agent.exists())
 
     def test_provider_auth_validation_checks_every_field(self) -> None:
         provider = {
@@ -349,6 +373,39 @@ class ManagerTests(unittest.TestCase):
             self.assertTrue(status["checks"]["desktop_multi_agent_v2_disabled"])
             self.assertTrue(status["checks"]["desktop_codex_detected"])
             self.assertTrue(status["checks"]["provider_valid"])
+
+    def test_status_reports_legacy_role_migration_required(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            manager,
+            "credential_has_key",
+            return_value=True,
+        ), mock.patch.object(manager, "codex_version_text", return_value="codex-cli test"):
+            paths = manager.resolve_paths(directory)
+            paths.config.parent.mkdir(parents=True, exist_ok=True)
+            paths.config.write_text(
+                'model = "gpt-5.6-sol"\n'
+                f"model_catalog_json = {manager.toml_string(str(paths.catalog))}\n"
+                "[features]\n"
+                "multi_agent_v2 = false\n"
+                + manager.managed_provider_block()
+            )
+            paths.catalog.write_text(
+                json.dumps(
+                    {
+                        "models": [
+                            {"slug": "gpt-5.6-sol", "multi_agent_version": manager.PARENT_MULTI_AGENT_VERSION},
+                            {"slug": manager.MODEL},
+                        ]
+                    }
+                )
+            )
+            paths.legacy_agent.parent.mkdir(parents=True, exist_ok=True)
+            paths.legacy_agent.write_text(manager.expected_legacy_agent_text())
+            manager.write_manifest(paths, {"schema_version": 3})
+            status = manager.static_status(paths, "desktop-codex")
+            self.assertEqual(status["status"], "partial")
+            self.assertTrue(status["checks"]["legacy_agent_exists"])
+            self.assertTrue(status["checks"]["role_migration_required"])
 
     def test_native_test_uses_fresh_session_without_catalog_overrides(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -766,6 +823,88 @@ class ManagerTests(unittest.TestCase):
             self.assertEqual(manifest["parent_model"], "gpt-5.6-terra")
             self.assertEqual(manifest["parent_multi_agent_version"], manager.PARENT_MULTI_AGENT_VERSION)
             self.assertEqual(manifest["parent_original_multi_agent_version"], "original-terra")
+
+    def test_repair_migrates_managed_deepseek_worker_to_deepseek(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            paths = manager.resolve_paths(directory)
+            legacy_agent = paths.home / "agents" / "DeepSeekWorker.toml"
+            legacy_text = (
+                manager.expected_agent_text()
+                .replace('name = "DeepSeek"', 'name = "DeepSeekWorker"', 1)
+                .replace("Text-only DeepSeek subagent", "Text-only DeepSeek worker", 1)
+                .replace(
+                    "You are DeepSeek, a focused text-only coding subagent",
+                    "You are DeepSeek Worker, a focused text-only coding worker",
+                    1,
+                )
+            )
+            paths.config.parent.mkdir(parents=True, exist_ok=True)
+            paths.config.write_text('model = "gpt-5.6-sol"\n')
+            legacy_agent.parent.mkdir(parents=True, exist_ok=True)
+            legacy_agent.write_text(legacy_text)
+            manager.write_manifest(
+                paths,
+                {
+                    "schema_version": 3,
+                    "managed_agent_file": True,
+                    "agent_preexisted": False,
+                    "agent_sha256": manager.sha256_bytes(legacy_text.encode()),
+                },
+            )
+            with mock.patch.object(
+                manager,
+                "fetch_official_deepseek_model",
+                return_value={"slug": manager.MODEL},
+            ), mock.patch.object(
+                manager,
+                "load_base_catalog",
+                return_value={"models": [{"slug": "gpt-5.6-sol"}]},
+            ):
+                result = manager.install(paths, "codex")
+            self.assertTrue(result["migrated_role"])
+            self.assertTrue(paths.agent.is_file())
+            self.assertEqual(paths.agent.read_text(), manager.expected_agent_text())
+            self.assertFalse(legacy_agent.exists())
+            manifest = manager.read_manifest(paths)
+            self.assertEqual(manifest["schema_version"], 4)
+            self.assertEqual(manifest["role"], "DeepSeek")
+            self.assertTrue(manifest["legacy_agent_migrated"])
+            self.assertTrue((Path(result["backup"]) / "DeepSeekWorker.toml").is_file())
+
+    def test_failed_role_migration_restores_legacy_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            paths = manager.resolve_paths(directory)
+            legacy_text = manager.expected_legacy_agent_text()
+            paths.config.parent.mkdir(parents=True, exist_ok=True)
+            paths.config.write_text('model = "gpt-5.6-sol"\n')
+            paths.legacy_agent.parent.mkdir(parents=True, exist_ok=True)
+            paths.legacy_agent.write_text(legacy_text)
+            manager.write_manifest(
+                paths,
+                {
+                    "schema_version": 3,
+                    "managed_agent_file": True,
+                    "agent_preexisted": False,
+                    "agent_sha256": manager.sha256_bytes(legacy_text.encode()),
+                },
+            )
+            with mock.patch.object(
+                manager,
+                "fetch_official_deepseek_model",
+                return_value={"slug": manager.MODEL},
+            ), mock.patch.object(
+                manager,
+                "load_base_catalog",
+                return_value={"models": [{"slug": "gpt-5.6-sol"}]},
+            ), mock.patch.object(
+                manager,
+                "write_manifest",
+                side_effect=OSError("injected manifest failure"),
+            ):
+                with self.assertRaises(OSError):
+                    manager.install(paths, "codex")
+            self.assertEqual(paths.legacy_agent.read_text(), legacy_text)
+            self.assertFalse(paths.agent.exists())
 
     def test_install_removes_legacy_role_marker_and_uses_standalone_agent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

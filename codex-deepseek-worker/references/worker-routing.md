@@ -1,6 +1,6 @@
 # Worker routing guide
 
-Use `DeepSeekWorker` when the task is bounded, text-only, and benefits from long-context reading, parallel capacity, or an independent model pass.
+Use `DeepSeek` when the task is bounded, text-only, and benefits from long-context reading, parallel capacity, or an independent model pass.
 
 ## Good worker tasks
 
