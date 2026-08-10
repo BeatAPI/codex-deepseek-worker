@@ -14,6 +14,8 @@ Manage the native `DeepSeek` configuration only. Do not use this Skill as a subs
 - Require `multi_agent_version = "v1"` for both the current parent model and `deepseek-v4-flash`, and keep `features.multi_agent_v2 = false`. A v2 target can encrypt away the cross-provider task payload even when the parent is v1.
 - Run `repair` after the parent model changes, then verify again.
 - Treat `DeepSeek` as text-only. Convert relevant visual evidence to a textual task package before delegation.
+- Keep the role's first-instance nickname candidate pinned to `DeepSeek`. Codex may add an ordinal suffix when multiple instances share one parent task because child names must remain unique.
+- Do not claim to customize the child icon. Native agent role files do not currently expose an icon field; Codex Desktop renders its generic subagent icon.
 - For daily work, have the parent Codex agent call:
 
   ```text
@@ -30,8 +32,8 @@ Manage the native `DeepSeek` configuration only. Do not use this Skill as a subs
 2. For first-time configuration, run `setup --json`. For parent-model drift or damaged managed configuration, run `repair --json`.
 3. If the result is `credential_missing`, request the DeepSeek API key once. Never echo it or write it to a temporary file. Pass it only through standard input with `--api-key-stdin`.
 4. Let `setup` or `test` create an isolated validation task through the bundled desktop runtime.
-5. Accept `ready` only when both parent and DeepSeek catalog entries use plaintext V1, the child-task database metadata matches the DeepSeek provider, model, effort, and role, and the child returns `NATIVE_DEEPSEEK_WORKER_OK`.
-6. Report the final status, actual provider, model, reasoning effort, role, and backup location. Do not print credentials or raw event logs.
+5. Accept `ready` only when both parent and DeepSeek catalog entries use plaintext V1, the child-task database metadata matches the DeepSeek provider, model, effort, role, and first-instance nickname, and the child returns `NATIVE_DEEPSEEK_WORKER_OK`.
+6. Report the final status, actual provider, model, reasoning effort, role, nickname, and backup location. Do not print credentials or raw event logs.
 
 ## Use the manager
 

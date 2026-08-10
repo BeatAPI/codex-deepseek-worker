@@ -19,6 +19,7 @@ The subagent is deliberately not the final decision-maker. Its agent contract re
 ## What V1 installs
 
 - Native Codex role: `DeepSeek`
+- First child display name in each new parent task: `DeepSeek`
 - Model: `deepseek-v4-flash`
 - Provider: official DeepSeek API
 - Reasoning effort: `high`
@@ -58,12 +59,19 @@ After setup returns `ready`, restart Codex and open a new task so the native rol
 For an end-to-end desktop smoke test, send this in the new task:
 
 ```text
-@DeepSeek Reply exactly DEEPSEEK_UI_OK and nothing else.
+Use the DeepSeek subagent exactly once. Ask it to reply exactly DEEPSEEK_UI_OK,
+wait for it, and return only its result. The parent must not answer on its behalf.
 ```
 
 Open the completed child task and confirm the child itself received the assignment
 and returned `DEEPSEEK_UI_OK`. A completed child that reports a missing assignment
 is a failed handoff; the parent must not write the token or requested content itself.
+
+The first DeepSeek child in a new parent task is displayed as `DeepSeek`. Codex
+requires child instance names to be unique, so additional DeepSeek children under
+the same parent task may appear as `DeepSeek the 2nd`, `DeepSeek the 3rd`, and so on.
+The child icon is currently owned by Codex Desktop's generic agent UI; native agent
+role configuration does not expose a custom icon field.
 
 Existing installations that used the former `DeepSeekWorker` role are migrated by
 `repair`: the manager backs up the old agent file, installs `DeepSeek`, removes only
@@ -137,6 +145,7 @@ model_provider = deepseek
 model = deepseek-v4-flash
 reasoning_effort = high
 agent_role = DeepSeek
+agent_nickname = DeepSeek
 ```
 
 Only then does the manager return `status: ready`.

@@ -24,6 +24,12 @@ The default `CODEX_HOME` is `~/.codex`:
 
 The manager does not change the top-level `model` or `model_provider`.
 
+The managed role sets `nickname_candidates = ["DeepSeek"]`. The first child under
+each new parent task is therefore displayed as `DeepSeek`. Codex enforces unique
+instance names within one parent task, so later children may receive ordinal suffixes.
+Native role configuration has no custom icon field; the child pane uses Codex
+Desktop's generic subagent icon.
+
 ## Role-name migration
 
 Version 1 originally installed `$CODEX_HOME/agents/DeepSeekWorker.toml`. A current
@@ -57,6 +63,7 @@ If the current task does not recognize the custom role, restart Codex and open a
    model = deepseek-v4-flash
    reasoning_effort = high
    agent_role = DeepSeek
+   agent_nickname = DeepSeek
    ```
 
 2. the exact child response `NATIVE_DEEPSEEK_WORKER_OK`.
