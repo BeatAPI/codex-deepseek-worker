@@ -34,7 +34,7 @@ V1 supports text tasks only. It does not claim image, screenshot, video, or mult
 Requirements:
 
 - macOS or Windows
-- Python 3.11+
+- Python 3.9+ (no separate Python packages to install)
 - ChatGPT/Codex desktop app launched at least once
 - A DeepSeek API key
 
@@ -150,4 +150,4 @@ Codex DeepSeek Worker is an open-source developer tool maintained by [BeatAPI](h
 
 ## License
 
-This project is released under the [MIT License](LICENSE). It is an original work developed entirely from scratch by BeatAPI and contains no third-party code. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the full statement.
+This project is released under the [MIT License](LICENSE). It is maintained by BeatAPI and includes the MIT-licensed `tomli` compatibility parser for Python 3.9 and 3.10. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for attribution.
