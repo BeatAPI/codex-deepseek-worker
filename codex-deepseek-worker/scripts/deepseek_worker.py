@@ -19,7 +19,8 @@ import time
 try:
     import tomllib
 except ModuleNotFoundError:  # Python < 3.11
-    tomllib = None  # type: ignore[assignment]
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "_vendor"))
+    import tomli as tomllib  # type: ignore[no-redef]
 import urllib.request
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -42,7 +43,7 @@ MODEL = "deepseek-v4-flash"
 PROVIDER = "deepseek"
 ROLE = "DeepSeekWorker"
 EFFORT = "high"
-MIN_PYTHON = (3, 11)
+MIN_PYTHON = (3, 9)
 PARENT_MULTI_AGENT_VERSION = "v1"
 DESKTOP_MULTI_AGENT_V2 = False
 MAX_STATE_DATABASES = 32
@@ -57,11 +58,6 @@ ROLE_END = "# END CODEX-DEEPSEEK-WORKER ROLE"
 DESKTOP_CODEX_CANDIDATES = (
     Path("/Applications/ChatGPT.app/Contents/Resources/codex"),
     Path("/Applications/Codex.app/Contents/Resources/codex"),
-)
-WINDOWS_CODEX_RELATIVE_CANDIDATES = (
-    Path("Programs") / "Codex" / "resources" / "codex.exe",
-    Path("Programs") / "OpenAI" / "Codex" / "resources" / "codex.exe",
-    Path("Codex") / "resources" / "codex.exe",
 )
 
 
@@ -143,37 +139,24 @@ def platform_name() -> str:
     return "unsupported"
 
 
-def find_desktop_codex() -> str:
-    configured = os.environ.get("CODEX_DESKTOP_BIN")
-    if configured:
-        candidate = Path(configured).expanduser()
+def find_desktop_codex(explicit_override: str | None = None) -> str:
+    if explicit_override:
+        candidate = Path(explicit_override).expanduser()
         if candidate.is_file():
             return str(candidate.resolve())
         raise ManagerError(
             "desktop_codex_missing",
-            f"CODEX_DESKTOP_BIN points to a missing file: {candidate}",
+            f"--codex-bin points to a missing file: {candidate}",
         )
 
-    candidates: list[Path] = []
-    if platform_name() == "macos":
-        candidates.extend(DESKTOP_CODEX_CANDIDATES)
-    elif platform_name() == "windows":
-        for variable in ("LOCALAPPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)"):
-            root = os.environ.get(variable)
-            if root:
-                candidates.extend(Path(root) / relative for relative in WINDOWS_CODEX_RELATIVE_CANDIDATES)
+    candidates = DESKTOP_CODEX_CANDIDATES if platform_name() == "macos" else ()
     for candidate in candidates:
         if candidate.is_file():
             return str(candidate.resolve())
 
-    if platform_name() == "windows":
-        discovered = shutil.which("codex.exe") or shutil.which("codex")
-        if discovered:
-            return discovered
-
     raise ManagerError(
         "desktop_codex_missing",
-        "Could not find the Codex desktop bundled runtime. Install and launch the app first; set CODEX_DESKTOP_BIN if Windows discovery fails.",
+        "Could not find the Codex desktop bundled runtime. Install and launch the app first; use --codex-bin with an explicit trusted path if automatic discovery fails.",
     )
 
 
@@ -233,8 +216,8 @@ def _macos_store_credential(secret: str) -> None:
             "-s",
             CREDENTIAL_TARGET,
             "-w",
-            secret,
         ],
+        input=secret + "\n",
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         text=True,
@@ -246,6 +229,15 @@ def _macos_store_credential(secret: str) -> None:
 def _macos_remove_credential() -> bool:
     proc = subprocess.run(
         ["/usr/bin/security", "delete-generic-password", "-a", credential_account(), "-s", CREDENTIAL_TARGET],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return proc.returncode == 0
+
+
+def _macos_credential_exists() -> bool:
+    proc = subprocess.run(
+        ["/usr/bin/security", "find-generic-password", "-a", credential_account(), "-s", CREDENTIAL_TARGET],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -310,6 +302,21 @@ def _windows_read_credential() -> str | None:
         advapi32.CredFree(credential)
 
 
+def _windows_credential_exists() -> bool:
+    ctypes, credential_type, advapi32 = _windows_credential_api()
+    credential = ctypes.POINTER(credential_type)()
+    if not advapi32.CredReadW(CREDENTIAL_TARGET, 1, 0, ctypes.byref(credential)):
+        error = ctypes.get_last_error()
+        if error == 1168:
+            return False
+        raise ManagerError(
+            "credential_read_failed",
+            f"Could not inspect Windows Credential Manager (error {error}).",
+        )
+    advapi32.CredFree(credential)
+    return True
+
+
 def _windows_store_credential(secret: str) -> None:
     ctypes, credential_type, advapi32 = _windows_credential_api()
     raw = secret.encode("utf-8")
@@ -353,9 +360,12 @@ def read_credential_key() -> str | None:
 
 
 def credential_has_key() -> bool:
-    if not credential_available():
-        return False
-    return read_credential_key() is not None
+    backend = credential_backend()
+    if backend == "macos-keychain":
+        return _macos_credential_exists()
+    if backend == "windows-credential-manager":
+        return _windows_credential_exists()
+    return False
 
 
 def store_credential_key(secret: str) -> None:
@@ -372,11 +382,12 @@ def store_credential_key(secret: str) -> None:
 
 
 def remove_credential_key() -> bool:
-    if not credential_available() or not credential_has_key():
-        return False
-    if credential_backend() == "macos-keychain":
+    backend = credential_backend()
+    if backend == "macos-keychain":
         return _macos_remove_credential()
-    return _windows_remove_credential()
+    if backend == "windows-credential-manager":
+        return _windows_remove_credential()
+    return False
 
 
 def toml_string(value: str) -> str:
@@ -388,12 +399,6 @@ def toml_string_array(values: list[str]) -> str:
 
 
 def parse_toml_text(text: str) -> dict[str, Any]:
-    if tomllib is None:
-        raise ManagerError(
-            "unsupported_python",
-            "codex-deepseek-worker requires Python 3.11 or newer.",
-            {"required": "3.11+", "current": platform.python_version()},
-        )
     try:
         return tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:
@@ -1328,8 +1333,8 @@ def main() -> int:
         emit(
             result(
                 "unsupported_python",
-                message="codex-deepseek-worker requires Python 3.11 or newer.",
-                required="3.11+",
+                message="codex-deepseek-worker requires Python 3.9 or newer.",
+                required="3.9+",
                 current=platform.python_version(),
             ),
             "--json" in sys.argv,
@@ -1350,6 +1355,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("status", "setup", "test", "repair", "disable", "uninstall"))
     parser.add_argument("--codex-home")
+    parser.add_argument("--codex-bin")
     parser.add_argument("--api-key-stdin", action="store_true")
     parser.add_argument("--skip-live-test", action="store_true")
     parser.add_argument("--remove-credential", action="store_true")
@@ -1357,7 +1363,7 @@ def main() -> int:
     args = parser.parse_args()
     paths = resolve_paths(args.codex_home)
     try:
-        codex_bin = find_desktop_codex() if args.command in {"status", "setup", "repair", "test"} else None
+        codex_bin = find_desktop_codex(args.codex_bin) if args.command in {"status", "setup", "repair", "test"} else None
         if args.command == "status":
             payload = static_status(paths, codex_bin)
         else:

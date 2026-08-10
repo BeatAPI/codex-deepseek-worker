@@ -6,6 +6,8 @@ import copy
 import importlib.util
 import io
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -29,6 +31,32 @@ spec.loader.exec_module(manager)
 
 
 class ManagerTests(unittest.TestCase):
+    def test_cli_status_runs_on_python_3_9_and_newer(self) -> None:
+        if sys.version_info < (3, 9):
+            self.skipTest("Python 3.9 is the oldest supported bootstrap runtime")
+        with tempfile.TemporaryDirectory() as directory:
+            codex_home = Path(directory)
+            (codex_home / "config.toml").write_text('model = "gpt-test"\n')
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "-I",
+                    str(SCRIPT),
+                    "status",
+                    "--codex-home",
+                    str(codex_home),
+                    "--codex-bin",
+                    sys.executable,
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            payload = json.loads(proc.stdout)
+        self.assertNotEqual(payload["status"], "unsupported_python")
+        self.assertTrue(payload["checks"]["config_valid"])
+
     def test_managed_block_is_idempotent(self) -> None:
         original = 'model = "gpt-5.6-sol"\n\n[features]\nmulti_agent = true\n'
         with tempfile.TemporaryDirectory() as directory:
@@ -205,9 +233,9 @@ class ManagerTests(unittest.TestCase):
             return_value="windows",
         ), mock.patch.object(
             manager,
-            "_windows_read_credential",
-            return_value="sk-test",
-        ) as read, mock.patch.object(
+            "_windows_credential_exists",
+            return_value=True,
+        ) as exists, mock.patch.object(
             manager,
             "_windows_store_credential",
         ) as store, mock.patch.object(
@@ -219,11 +247,11 @@ class ManagerTests(unittest.TestCase):
             self.assertTrue(manager.credential_has_key())
             manager.store_credential_key("sk-test")
             self.assertTrue(manager.remove_credential_key())
-        read.assert_called()
+        exists.assert_called_once_with()
         store.assert_called_once_with("sk-test")
         remove.assert_called_once_with()
 
-    def test_windows_desktop_codex_falls_back_to_path(self) -> None:
+    def test_windows_desktop_codex_does_not_fall_back_to_path(self) -> None:
         with mock.patch.dict(manager.os.environ, {}, clear=True), mock.patch.object(
             manager,
             "platform_name",
@@ -231,9 +259,61 @@ class ManagerTests(unittest.TestCase):
         ), mock.patch.object(
             manager.shutil,
             "which",
-            side_effect=[r"C:\Tools\codex.exe", None],
-        ):
-            self.assertEqual(manager.find_desktop_codex(), r"C:\Tools\codex.exe")
+            return_value=r"C:\Tools\codex.exe",
+        ) as which:
+            with self.assertRaises(manager.ManagerError) as raised:
+                manager.find_desktop_codex()
+        self.assertEqual(raised.exception.code, "desktop_codex_missing")
+        which.assert_not_called()
+
+    def test_windows_desktop_codex_requires_explicit_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            candidate = root / "codex.exe"
+            candidate.parent.mkdir(parents=True, exist_ok=True)
+            candidate.write_bytes(b"placeholder")
+            with mock.patch.object(
+                manager,
+                "platform_name",
+                return_value="windows",
+            ):
+                with self.assertRaises(manager.ManagerError) as raised:
+                    manager.find_desktop_codex()
+                self.assertEqual(
+                    manager.find_desktop_codex(str(candidate)),
+                    str(candidate.resolve()),
+                )
+            self.assertEqual(raised.exception.code, "desktop_codex_missing")
+
+    def test_desktop_codex_override_must_be_explicit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
+            manager.os.environ,
+            {"CODEX_DESKTOP_BIN": sys.executable},
+            clear=True,
+        ), mock.patch.object(manager, "platform_name", return_value="unsupported"):
+            with self.assertRaises(manager.ManagerError):
+                manager.find_desktop_codex()
+            self.assertEqual(
+                manager.find_desktop_codex(str(Path(sys.executable))),
+                str(Path(sys.executable).resolve()),
+            )
+
+    def test_macos_store_credential_keeps_secret_out_of_argv(self) -> None:
+        secret = "sk-sentinel-never-in-argv"
+        proc = SimpleNamespace(returncode=0, stderr="")
+        with mock.patch.object(manager.subprocess, "run", return_value=proc) as run:
+            manager._macos_store_credential(secret)
+        argv = run.call_args.args[0]
+        self.assertNotIn(secret, argv)
+        self.assertEqual(argv[-1], "-w")
+        self.assertEqual(run.call_args.kwargs["input"], secret + "\n")
+
+    def test_macos_credential_presence_does_not_read_secret(self) -> None:
+        proc = SimpleNamespace(returncode=0)
+        with mock.patch.object(manager.subprocess, "run", return_value=proc) as run:
+            self.assertTrue(manager._macos_credential_exists())
+        argv = run.call_args.args[0]
+        self.assertNotIn("-w", argv)
 
     def test_static_status_is_configured_with_complete_codex_home(self) -> None:
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(

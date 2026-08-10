@@ -3,7 +3,7 @@
 ## Supported V1 surface
 
 - macOS and Windows
-- Python 3.11+
+- Python 3.9+ with the bundled TOML compatibility parser
 - ChatGPT/Codex desktop app launched at least once
 - Official DeepSeek Responses-compatible endpoint used by Codex
 - `deepseek-v4-flash`
@@ -26,7 +26,7 @@ The manager does not change the top-level `model` or `model_provider`.
 
 ## Native routing
 
-The manager discovers the desktop app's bundled Codex runtime. On Windows it also checks common install locations and may use `CODEX_DESKTOP_BIN` when automatic discovery fails.
+On macOS, the manager discovers the desktop app's bundled Codex runtime from the standard app locations. It does not search `PATH` or trust environment-variable install roots. On Windows, the caller must pass the exact trusted desktop runtime path explicitly with `--codex-bin`; the manager never automatically executes a discovered file.
 
 The manager reads the active parent model, disables `features.multi_agent_v2`, and sets that parent model's catalog entry to `multi_agent_version = "v1"`. This is required by the currently validated cross-provider plaintext routing path. Run `repair` whenever the parent model changes.
 
