@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import getpass
 import hashlib
 import json
@@ -40,10 +41,18 @@ except ImportError:  # macOS / Linux
 
 
 MODEL = "deepseek-v4-flash"
+PRO_MODEL = "deepseek-v4-pro"
 PROVIDER = "deepseek"
-ROLE = "DeepSeek"
+ROLE = "DeepSeek-v4-flash"
+PRO_ROLE = "DeepSeek-v4-pro"
+PRO_NICKNAME = PRO_ROLE
+OLD_ROLE = "DeepSeek"
 LEGACY_ROLE = "DeepSeekWorker"
 EFFORT = "high"
+WORKERS = (
+    (ROLE, MODEL, ROLE),
+    (PRO_ROLE, PRO_MODEL, PRO_NICKNAME),
+)
 MIN_PYTHON = (3, 9)
 PARENT_MULTI_AGENT_VERSION = "v1"
 DESKTOP_MULTI_AGENT_V2 = False
@@ -75,6 +84,8 @@ class Paths:
     config: Path
     catalog: Path
     agent: Path
+    pro_agent: Path
+    old_agent: Path
     legacy_agent: Path
     state_dir: Path
     manifest: Path
@@ -87,6 +98,8 @@ def resolve_paths(codex_home: str | None) -> Paths:
         config=home / "config.toml",
         catalog=home / "models-with-deepseek.json",
         agent=home / "agents" / f"{ROLE}.toml",
+        pro_agent=home / "agents" / f"{PRO_ROLE}.toml",
+        old_agent=home / "agents" / f"{OLD_ROLE}.toml",
         legacy_agent=home / "agents" / f"{LEGACY_ROLE}.toml",
         state_dir=home / "codex-deepseek-worker",
         manifest=home / "codex-deepseek-worker" / "manifest.json",
@@ -524,22 +537,36 @@ def remove_table_bool_if_value(text: str, table: str, key: str, expected: bool) 
 
 def agent_text(role: str) -> str:
     description_noun = "worker" if role == LEGACY_ROLE else "subagent"
-    nickname_candidates = (
-        "" if role == LEGACY_ROLE else f'nickname_candidates = ["{ROLE}"]\n'
-    )
+    if role == PRO_ROLE:
+        nickname = PRO_NICKNAME
+    elif role == OLD_ROLE:
+        nickname = OLD_ROLE
+    else:
+        nickname = ROLE
+    nickname_candidates = "" if role == LEGACY_ROLE else f'nickname_candidates = ["{nickname}"]\n'
     handoff_contract = (
         ""
         if role == LEGACY_ROLE
         else " The parent must accept only this subagent's returned task result; if it reports a missing assignment, the parent must not substitute its own output and must report the handoff failure."
     )
-    identity = (
-        "DeepSeek Worker, a focused text-only coding worker"
-        if role == LEGACY_ROLE
-        else "DeepSeek, a focused text-only coding subagent"
+    if role == LEGACY_ROLE:
+        identity = "DeepSeek Worker, a focused text-only coding worker"
+    elif role == PRO_ROLE:
+        identity = "DeepSeek-v4-pro, a focused text-only coding subagent for demanding tasks"
+    elif role == OLD_ROLE:
+        identity = "DeepSeek, a focused text-only coding subagent"
+    else:
+        identity = "DeepSeek-v4-flash, a focused text-only coding subagent"
+    model = PRO_MODEL if role == PRO_ROLE else MODEL
+    tier = " Pro" if role == PRO_ROLE else ""
+    routing_guidance = (
+        " Prefer this Pro role for demanding coding, deep reasoning, difficult long-context synthesis, and high-value independent review."
+        if role == PRO_ROLE
+        else " Prefer this Flash role for fast repository exploration, focused tests, routine implementation, and economical parallel work."
     )
     return f'''name = "{role}"
-{nickname_candidates}description = "Text-only DeepSeek {description_noun} for bounded repository research, implementation, tests, review, and documentation. Use it when parallel capacity, long-context reading, or an independent model pass adds value. Do not use it for visual inspection or final high-risk decisions.{handoff_contract}"
-model = "{MODEL}"
+{nickname_candidates}description = "Text-only DeepSeek{tier} {description_noun} for bounded repository research, implementation, tests, review, and documentation.{routing_guidance} Do not use it for visual inspection or final high-risk decisions.{handoff_contract}"
+model = "{model}"
 model_provider = "{PROVIDER}"
 model_reasoning_effort = "{EFFORT}"
 developer_instructions = """
@@ -562,6 +589,14 @@ def expected_agent_text() -> str:
 
 def expected_legacy_agent_text() -> str:
     return agent_text(LEGACY_ROLE)
+
+
+def expected_old_agent_text() -> str:
+    return agent_text(OLD_ROLE)
+
+
+def expected_pro_agent_text() -> str:
+    return agent_text(PRO_ROLE)
 
 
 def managed_provider_block() -> str:
@@ -632,13 +667,17 @@ def compatible_existing(parsed: dict[str, Any], paths: Paths) -> tuple[bool, lis
     provider = (parsed.get("model_providers") or {}).get(PROVIDER)
     issues.extend(provider_conflicts(provider))
     agents = parsed.get("agents") or {}
-    for role in (ROLE, LEGACY_ROLE):
+    for role in (ROLE, PRO_ROLE, OLD_ROLE, LEGACY_ROLE):
         agent = agents.get(role)
         if agent:
             if set(agent) - {"description", "config_file"}:
                 issues.append(f"agents.{role}")
             config_file = Path(agent.get("config_file", "")).expanduser()
             allowed_paths = {paths.agent}
+            if role == PRO_ROLE:
+                allowed_paths = {paths.pro_agent}
+            if role == OLD_ROLE:
+                allowed_paths = {paths.old_agent}
             if role == LEGACY_ROLE:
                 allowed_paths.add(paths.legacy_agent)
             if config_file not in allowed_paths:
@@ -671,6 +710,22 @@ def fetch_official_deepseek_model() -> dict[str, Any]:
         if model.get("slug") == MODEL:
             return model
     raise ManagerError("official_model_missing", f"The official catalog does not contain {MODEL}.")
+
+
+def deepseek_pro_model(flash_model: dict[str, Any]) -> dict[str, Any]:
+    """Build Codex metadata for Pro from DeepSeek's official V4 Flash template.
+
+    DeepSeek exposes both models through the same Responses-compatible API and
+    documents the same context, reasoning, text, and tool surfaces. Its Codex
+    bootstrap currently publishes only the Flash catalog entry, so Pro inherits
+    that transport metadata and changes only model identity and presentation.
+    Native routing verification remains the acceptance gate.
+    """
+    model = copy.deepcopy(flash_model)
+    model["slug"] = PRO_MODEL
+    model["display_name"] = "DeepSeek-V4-Pro"
+    model["description"] = "DeepSeek's flagship agentic coding model."
+    return model
 
 
 def run_codex_models(codex_bin: str, paths: Paths) -> dict[str, Any]:
@@ -706,9 +761,16 @@ def load_base_catalog(codex_bin: str, paths: Paths, config: dict[str, Any]) -> d
 
 
 def merged_catalog(base: dict[str, Any], deepseek_model: dict[str, Any], parent_model: str) -> dict[str, Any]:
-    models = [model for model in base.get("models", []) if model.get("slug") != MODEL]
-    deepseek_model["multi_agent_version"] = PARENT_MULTI_AGENT_VERSION
-    models.append(deepseek_model)
+    models = [
+        model
+        for model in base.get("models", [])
+        if model.get("slug") not in {MODEL, PRO_MODEL}
+    ]
+    flash_model = copy.deepcopy(deepseek_model)
+    pro_model = deepseek_pro_model(deepseek_model)
+    flash_model["multi_agent_version"] = PARENT_MULTI_AGENT_VERSION
+    pro_model["multi_agent_version"] = PARENT_MULTI_AGENT_VERSION
+    models.extend((flash_model, pro_model))
     parent_found = False
     for model in models:
         if model.get("slug") == parent_model:
@@ -732,7 +794,15 @@ def make_backup(paths: Paths) -> Path:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     backup = paths.state_dir / "backups" / stamp
     backup.mkdir(parents=True, exist_ok=False)
-    for source in (paths.config, paths.catalog, paths.agent, paths.legacy_agent, paths.manifest):
+    for source in (
+        paths.config,
+        paths.catalog,
+        paths.agent,
+        paths.pro_agent,
+        paths.old_agent,
+        paths.legacy_agent,
+        paths.manifest,
+    ):
         if source.is_file():
             shutil.copy2(source, backup / source.name)
     return backup
@@ -773,6 +843,35 @@ def install(paths: Paths, codex_bin: str) -> dict[str, Any]:
         )
         if not agent_contract_upgradable:
             raise ManagerError("conflict", "The existing DeepSeek agent file differs from the managed configuration.", {"path": str(paths.agent)})
+    pro_agent_contract_upgradable = False
+    if paths.pro_agent.is_file() and paths.pro_agent.read_text() != expected_pro_agent_text():
+        current_pro_agent_hash = sha256_text_file(paths.pro_agent)
+        pro_agent_contract_upgradable = bool(
+            previous_manifest.get("managed_pro_agent_file")
+            and current_pro_agent_hash == previous_manifest.get("pro_agent_sha256")
+        )
+        if not pro_agent_contract_upgradable:
+            raise ManagerError(
+                "conflict",
+                "The existing DeepSeek-v4-pro agent file differs from the managed configuration.",
+                {"path": str(paths.pro_agent)},
+            )
+    old_agent_migratable = False
+    if paths.old_agent.is_file():
+        old_content = paths.old_agent.read_text()
+        old_hash = sha256_text_file(paths.old_agent)
+        previous_managed_old = bool(
+            previous_manifest.get("managed_agent_file")
+            and old_hash == previous_manifest.get("agent_sha256")
+        )
+        exact_old_content = old_content == expected_old_agent_text()
+        if not previous_managed_old and not (not previous_manifest and exact_old_content):
+            raise ManagerError(
+                "conflict",
+                "The existing DeepSeek file is not owned by this manager; migration was refused.",
+                {"path": str(paths.old_agent)},
+            )
+        old_agent_migratable = True
     legacy_agent_migratable = False
     if paths.legacy_agent.is_file():
         legacy_content = paths.legacy_agent.read_text()
@@ -790,7 +889,7 @@ def install(paths: Paths, codex_bin: str) -> dict[str, Any]:
             )
         legacy_agent_migratable = True
     legacy_role_present = False
-    for registered_role in (ROLE, LEGACY_ROLE):
+    for registered_role in (ROLE, PRO_ROLE, OLD_ROLE, LEGACY_ROLE):
         if (unmanaged_parsed.get("agents") or {}).get(registered_role):
             unmanaged_config = remove_toml_table(unmanaged_config, f"agents.{registered_role}")
             legacy_role_present = True
@@ -798,6 +897,8 @@ def install(paths: Paths, codex_bin: str) -> dict[str, Any]:
 
     catalog_preexisted_now = paths.catalog.is_file()
     agent_preexisted_now = paths.agent.is_file()
+    pro_agent_preexisted_now = paths.pro_agent.is_file()
+    agent_path_migrated = old_agent_migratable or legacy_agent_migratable
     selected_before = parsed.get("model_catalog_json") == str(paths.catalog)
     previous_schema = previous_manifest.get("schema_version", 1) if previous_manifest else 2
     previous_selection_managed = bool(previous_manifest.get("managed_catalog_selection"))
@@ -811,6 +912,11 @@ def install(paths: Paths, codex_bin: str) -> dict[str, Any]:
     )
     if previous_manifest and previous_schema < 2:
         catalog_preexisted = bool(previous_manifest.get("catalog_preexisted", False))
+    else:
+        catalog_preexisted = bool(previous_manifest.get("catalog_preexisted", catalog_preexisted_now))
+    if agent_path_migrated:
+        agent_preexisted = agent_preexisted_now
+    elif previous_manifest and previous_schema < 2:
         agent_preexisted = bool(
             previous_manifest.get(
                 "agent_preexisted",
@@ -818,8 +924,10 @@ def install(paths: Paths, codex_bin: str) -> dict[str, Any]:
             )
         )
     else:
-        catalog_preexisted = bool(previous_manifest.get("catalog_preexisted", catalog_preexisted_now))
         agent_preexisted = bool(previous_manifest.get("agent_preexisted", agent_preexisted_now))
+    pro_agent_preexisted = bool(
+        previous_manifest.get("pro_agent_preexisted", pro_agent_preexisted_now)
+    )
     current_multi_agent_v2 = (parsed.get("features") or {}).get("multi_agent_v2")
     previous_multi_agent_v2 = (
         previous_manifest.get("previous_multi_agent_v2")
@@ -881,38 +989,55 @@ def install(paths: Paths, codex_bin: str) -> dict[str, Any]:
         atomic_write(paths.catalog, catalog_bytes)
         if not paths.agent.is_file() or agent_contract_upgradable:
             atomic_write(paths.agent, expected_agent_text().encode(), mode=0o644)
+        if not paths.pro_agent.is_file() or pro_agent_contract_upgradable:
+            atomic_write(paths.pro_agent, expected_pro_agent_text().encode(), mode=0o644)
         atomic_write(paths.config, new_config.encode())
         if legacy_agent_migratable and paths.legacy_agent.is_file():
             paths.legacy_agent.unlink()
+        if old_agent_migratable and paths.old_agent.is_file():
+            paths.old_agent.unlink()
 
         previous_agent_managed = bool(previous_manifest.get("managed_agent_file"))
-        managed_agent_file = previous_agent_managed or not agent_preexisted_now
+        managed_agent_file = (
+            previous_agent_managed and not agent_path_migrated
+        ) or not agent_preexisted_now
+        previous_pro_agent_managed = bool(previous_manifest.get("managed_pro_agent_file"))
+        managed_pro_agent_file = previous_pro_agent_managed or not pro_agent_preexisted_now
         catalog_original_backup = previous_manifest.get("catalog_original_backup")
         if not catalog_original_backup and catalog_preexisted_now:
             candidate = backup / paths.catalog.name
             if candidate.is_file():
                 catalog_original_backup = str(candidate)
-        adopted_existing = provider_exists or agent_preexisted or catalog_preexisted
+        adopted_existing = (
+            provider_exists or agent_preexisted or pro_agent_preexisted or catalog_preexisted
+        )
         manifest = {
-            "schema_version": 4,
+            "schema_version": 6,
             "installed_at": datetime.now().isoformat(timespec="seconds"),
             "backup": str(backup),
             "previous_model_catalog_json": previous_catalog_value,
             "managed_catalog_selection": managed_catalog_selection,
             "managed_provider_block": provider_marker_present or not provider_exists,
             "managed_agent_file": managed_agent_file,
+            "managed_pro_agent_file": managed_pro_agent_file,
             "role": ROLE,
+            "pro_role": PRO_ROLE,
             "legacy_agent_migrated": bool(
                 previous_manifest.get("legacy_agent_migrated") or legacy_agent_migratable
+            ),
+            "old_role_migrated": bool(
+                previous_manifest.get("old_role_migrated") or old_agent_migratable
             ),
             "catalog_preexisted": catalog_preexisted,
             "catalog_original_backup": catalog_original_backup,
             "agent_preexisted": agent_preexisted,
+            "pro_agent_preexisted": pro_agent_preexisted,
             "legacy_role_block_removed": role_marker_present or legacy_role_present,
             "adopted_existing": adopted_existing,
             "parent_model": parent_model,
             "parent_multi_agent_version": PARENT_MULTI_AGENT_VERSION,
             "deepseek_multi_agent_version": PARENT_MULTI_AGENT_VERSION,
+            "deepseek_pro_multi_agent_version": PARENT_MULTI_AGENT_VERSION,
             "parent_original_multi_agent_version": parent_original_version,
             "managed_multi_agent_v2": managed_multi_agent_v2,
             "previous_multi_agent_v2": previous_multi_agent_v2,
@@ -920,13 +1045,15 @@ def install(paths: Paths, codex_bin: str) -> dict[str, Any]:
             "config_sha256": sha256_bytes(new_config.encode()),
             "catalog_sha256": sha256_bytes(catalog_bytes),
             "agent_sha256": sha256_bytes(expected_agent_text().encode()),
+            "pro_agent_sha256": sha256_bytes(expected_pro_agent_text().encode()),
         }
         write_manifest(paths, manifest)
         return {
             "backup": str(backup),
             "adopted_existing": adopted_existing,
-            "migrated_role": legacy_agent_migratable,
+            "migrated_role": legacy_agent_migratable or old_agent_migratable,
             "upgraded_agent_contract": agent_contract_upgradable,
+            "upgraded_pro_agent_contract": pro_agent_contract_upgradable,
         }
     except Exception:
         restore_backup(paths, backup)
@@ -938,9 +1065,11 @@ def static_status(paths: Paths, codex_bin: str | None = None) -> dict[str, Any]:
         "config_exists": paths.config.is_file(),
         "catalog_exists": paths.catalog.is_file(),
         "agent_exists": paths.agent.is_file(),
+        "pro_agent_exists": paths.pro_agent.is_file(),
+        "old_agent_exists": paths.old_agent.is_file(),
         "legacy_agent_exists": paths.legacy_agent.is_file(),
-        "role_migration_required": paths.legacy_agent.is_file(),
-        "role_migration_complete": not paths.legacy_agent.is_file(),
+        "role_migration_required": paths.old_agent.is_file() or paths.legacy_agent.is_file(),
+        "role_migration_complete": not paths.old_agent.is_file() and not paths.legacy_agent.is_file(),
         "credential_backend": credential_backend(),
         "credential_present": credential_has_key(),
         "manifest_exists": paths.manifest.is_file(),
@@ -956,7 +1085,12 @@ def static_status(paths: Paths, codex_bin: str | None = None) -> dict[str, Any]:
             errors.append(str(exc))
     provider = (parsed.get("model_providers") or {}).get(PROVIDER)
     registered_roles = parsed.get("agents") or {}
-    role = registered_roles.get(ROLE) or registered_roles.get(LEGACY_ROLE)
+    role = (
+        registered_roles.get(ROLE)
+        or registered_roles.get(PRO_ROLE)
+        or registered_roles.get(OLD_ROLE)
+        or registered_roles.get(LEGACY_ROLE)
+    )
     checks["provider_registered"] = bool(provider)
     checks["provider_valid"] = bool(provider) and not provider_conflicts(provider)
     checks["agent_discovery"] = "standalone"
@@ -974,6 +1108,9 @@ def static_status(paths: Paths, codex_bin: str | None = None) -> dict[str, Any]:
         try:
             data = json.loads(paths.catalog.read_text())
             checks["model_registered"] = any(item.get("slug") == MODEL for item in data.get("models", []))
+            checks["pro_model_registered"] = any(
+                item.get("slug") == PRO_MODEL for item in data.get("models", [])
+            )
             deepseek_entry = next(
                 (item for item in data.get("models", []) if item.get("slug") == MODEL),
                 None,
@@ -983,6 +1120,16 @@ def static_status(paths: Paths, codex_bin: str | None = None) -> dict[str, Any]:
             )
             checks["deepseek_uses_plaintext_v1"] = (
                 checks["deepseek_multi_agent_version"] == PARENT_MULTI_AGENT_VERSION
+            )
+            pro_entry = next(
+                (item for item in data.get("models", []) if item.get("slug") == PRO_MODEL),
+                None,
+            )
+            checks["deepseek_pro_multi_agent_version"] = (
+                pro_entry.get("multi_agent_version") if pro_entry else None
+            )
+            checks["deepseek_pro_uses_plaintext_v1"] = (
+                checks["deepseek_pro_multi_agent_version"] == PARENT_MULTI_AGENT_VERSION
             )
             parent_entry = next(
                 (item for item in data.get("models", []) if parent_model and item.get("slug") == parent_model),
@@ -996,14 +1143,21 @@ def static_status(paths: Paths, codex_bin: str | None = None) -> dict[str, Any]:
             )
         except (OSError, json.JSONDecodeError):
             checks["model_registered"] = False
+            checks["pro_model_registered"] = False
             checks["deepseek_uses_plaintext_v1"] = False
+            checks["deepseek_pro_uses_plaintext_v1"] = False
             checks["parent_uses_plaintext_v1"] = False
             errors.append("Could not parse the model catalog.")
     else:
         checks["model_registered"] = False
+        checks["pro_model_registered"] = False
         checks["deepseek_uses_plaintext_v1"] = False
+        checks["deepseek_pro_uses_plaintext_v1"] = False
         checks["parent_uses_plaintext_v1"] = False
     checks["agent_content_valid"] = paths.agent.is_file() and paths.agent.read_text() == expected_agent_text()
+    checks["pro_agent_content_valid"] = (
+        paths.pro_agent.is_file() and paths.pro_agent.read_text() == expected_pro_agent_text()
+    )
 
     version: tuple[int, int, int] | None = None
     if codex_bin:
@@ -1020,11 +1174,14 @@ def static_status(paths: Paths, codex_bin: str | None = None) -> dict[str, Any]:
         "provider_valid",
         "catalog_selected",
         "model_registered",
+        "pro_model_registered",
         "deepseek_uses_plaintext_v1",
+        "deepseek_pro_uses_plaintext_v1",
         "parent_model_configured",
         "parent_uses_plaintext_v1",
         "desktop_multi_agent_v2_disabled",
         "agent_content_valid",
+        "pro_agent_content_valid",
         "credential_present",
         "manifest_exists",
         "legacy_role_registration_absent",
@@ -1035,10 +1192,11 @@ def static_status(paths: Paths, codex_bin: str | None = None) -> dict[str, Any]:
     return result("configured" if ready else "partial", checks=checks, errors=errors)
 
 
-def direct_test(paths: Paths, codex_bin: str) -> dict[str, Any]:
+def direct_test(paths: Paths, codex_bin: str, model: str = MODEL) -> dict[str, Any]:
     env = dict(os.environ)
     env["CODEX_HOME"] = str(paths.home)
-    prompt = "Reply exactly DEEPSEEK_WORKER_DIRECT_OK and nothing else."
+    token = "DEEPSEEK_PRO_WORKER_DIRECT_OK" if model == PRO_MODEL else "DEEPSEEK_WORKER_DIRECT_OK"
+    prompt = f"Reply exactly {token} and nothing else."
     proc = subprocess.run(
         [
             codex_bin,
@@ -1051,7 +1209,7 @@ def direct_test(paths: Paths, codex_bin: str) -> dict[str, Any]:
             "-C",
             str(paths.home),
             "-m",
-            MODEL,
+            model,
             "-c",
             'model_provider="deepseek"',
             "-c",
@@ -1063,13 +1221,13 @@ def direct_test(paths: Paths, codex_bin: str) -> dict[str, Any]:
         env=env,
         timeout=180,
     )
-    if proc.returncode != 0 or "DEEPSEEK_WORKER_DIRECT_OK" not in proc.stdout:
+    if proc.returncode != 0 or token not in proc.stdout:
         raise ManagerError(
             "direct_test_failed",
             "The direct DeepSeek provider test failed.",
             {"stderr": proc.stderr[-1000:]},
         )
-    return {"direct": True}
+    return {"direct": True, "model": model}
 
 
 def choose_parent_model(paths: Paths) -> str:
@@ -1148,13 +1306,20 @@ def wait_for_child_metadata(
         time.sleep(min(poll_interval, remaining))
 
 
-def native_test(paths: Paths, codex_bin: str) -> dict[str, Any]:
+def native_test(
+    paths: Paths,
+    codex_bin: str,
+    role: str = ROLE,
+    model: str = MODEL,
+    nickname: str = ROLE,
+) -> dict[str, Any]:
     parent_model = choose_parent_model(paths)
     env = dict(os.environ)
     env["CODEX_HOME"] = str(paths.home)
+    token = "NATIVE_DEEPSEEK_PRO_WORKER_OK" if role == PRO_ROLE else "NATIVE_DEEPSEEK_WORKER_OK"
     prompt = (
-        f'Use the native spawn_agent tool exactly once. Set agent_type to {ROLE} and fork_turns to none. '
-        'Give it this task: Reply exactly NATIVE_DEEPSEEK_WORKER_OK. '
+        f'Use the native spawn_agent tool exactly once. Set agent_type to {role} and fork_turns to none. '
+        f'Give it this task: Reply exactly {token}. '
         "Then wait for that subagent and return only its final response."
     )
     proc = subprocess.run(
@@ -1212,12 +1377,12 @@ def native_test(paths: Paths, codex_bin: str) -> dict[str, Any]:
     metadata = wait_for_child_metadata(paths, child_id) if child_id else None
     expected = {
         "model_provider": PROVIDER,
-        "model": MODEL,
+        "model": model,
         "reasoning_effort": EFFORT,
-        "agent_role": ROLE,
-        "agent_nickname": ROLE,
+        "agent_role": role,
+        "agent_nickname": nickname,
     }
-    if len(child_ids) != 1 or child_message != "NATIVE_DEEPSEEK_WORKER_OK" or metadata != expected:
+    if len(child_ids) != 1 or child_message != token or metadata != expected:
         raise ManagerError(
             "native_route_mismatch",
             "Native worker routing evidence is incomplete or does not match the managed DeepSeek configuration.",
@@ -1235,16 +1400,39 @@ def run_tests(paths: Paths, codex_bin: str) -> dict[str, Any]:
     status = static_status(paths, codex_bin)
     if status["status"] != "configured":
         raise ManagerError("not_configured", "Static configuration is incomplete; live verification cannot run.", status)
-    direct = direct_test(paths, codex_bin)
-    native = native_test(paths, codex_bin)
-    return result("ready", **direct, **native, new_task_required=True, restart_required=True)
+    direct_results = [direct_test(paths, codex_bin, model) for _, model, _ in WORKERS]
+    native_results = [
+        native_test(paths, codex_bin, role, model, nickname)
+        for role, model, nickname in WORKERS
+    ]
+    return result(
+        "ready",
+        model_provider=PROVIDER,
+        direct_models=[item["model"] for item in direct_results],
+        workers=native_results,
+        new_task_required=True,
+        restart_required=True,
+    )
 
 
 def restore_backup(paths: Paths, backup: Path) -> None:
-    for target in (paths.config, paths.catalog, paths.agent, paths.legacy_agent, paths.manifest):
+    for target in (
+        paths.config,
+        paths.catalog,
+        paths.agent,
+        paths.pro_agent,
+        paths.old_agent,
+        paths.legacy_agent,
+        paths.manifest,
+    ):
         source = backup / target.name
         if source.is_file():
-            agent_mode = target in (paths.agent, paths.legacy_agent)
+            agent_mode = target in (
+                paths.agent,
+                paths.pro_agent,
+                paths.old_agent,
+                paths.legacy_agent,
+            )
             atomic_write(target, source.read_bytes(), mode=0o644 if agent_mode else 0o600)
         elif target.is_file():
             target.unlink()
@@ -1289,14 +1477,24 @@ def disable(paths: Paths) -> dict[str, Any]:
         raise ManagerError("not_managed", "No managed manifest was found; existing configuration was not modified.")
     manifest = read_manifest(paths)
     managed_agent = paths.agent
-    if not managed_agent.is_file() and manifest.get("schema_version", 1) < 4:
-        managed_agent = paths.legacy_agent
+    if not managed_agent.is_file() and manifest.get("schema_version", 1) < 6:
+        if paths.old_agent.is_file():
+            managed_agent = paths.old_agent
+        elif paths.legacy_agent.is_file():
+            managed_agent = paths.legacy_agent
     if manifest.get("managed_agent_file") and managed_agent.is_file():
         if sha256_text_file(managed_agent) != manifest.get("agent_sha256"):
             raise ManagerError(
                 "conflict",
                 "The managed DeepSeek agent file was modified; disable was refused.",
                 {"path": str(managed_agent)},
+            )
+    if manifest.get("managed_pro_agent_file") and paths.pro_agent.is_file():
+        if sha256_text_file(paths.pro_agent) != manifest.get("pro_agent_sha256"):
+            raise ManagerError(
+                "conflict",
+                "The managed DeepSeek-v4-pro agent file was modified; disable was refused.",
+                {"path": str(paths.pro_agent)},
             )
     changed = False
     if paths.config.is_file():
@@ -1320,10 +1518,14 @@ def disable(paths: Paths) -> dict[str, Any]:
     if manifest.get("managed_agent_file") and managed_agent.is_file():
         managed_agent.unlink()
         changed = True
+    if manifest.get("managed_pro_agent_file") and paths.pro_agent.is_file():
+        paths.pro_agent.unlink()
+        changed = True
     return result(
         "disabled",
         changed=changed,
         agent_preserved=not bool(manifest.get("managed_agent_file")),
+        pro_agent_preserved=not bool(manifest.get("managed_pro_agent_file")),
         credential_preserved=credential_has_key(),
     )
 

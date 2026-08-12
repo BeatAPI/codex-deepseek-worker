@@ -1,6 +1,6 @@
 ---
 name: codex-deepseek-worker
-description: Configure, inspect, test, repair, disable, or uninstall DeepSeek V4 Flash as a native text-only Codex worker. Use when a user asks to add a DeepSeek worker or native DeepSeek subagent to Codex, verify its actual provider routing, repair it after a parent-model change, or remove its managed configuration. Do not trigger for general DeepSeek API questions or ordinary coding tasks after the worker is configured.
+description: Configure, inspect, test, repair, disable, or uninstall DeepSeek V4 Flash and V4 Pro as native text-only Codex workers. Use when a user asks to add a DeepSeek worker or native DeepSeek subagent to Codex, verify its actual provider routing, repair it after a parent-model change, or remove its managed configuration. Do not trigger for general DeepSeek API questions or ordinary coding tasks after the workers are configured.
 ---
 
 # Codex DeepSeek
@@ -11,18 +11,19 @@ Manage the native `DeepSeek` configuration only. Do not use this Skill as a subs
 
 - Use the Codex desktop app's bundled runtime. Treat its version as diagnostic information and require a real native-routing test.
 - Read the current parent model from Codex configuration. Do not hardcode or replace the user's primary model or login.
-- Require `multi_agent_version = "v1"` for both the current parent model and `deepseek-v4-flash`, and keep `features.multi_agent_v2 = false`. A v2 target can encrypt away the cross-provider task payload even when the parent is v1.
+- Require `multi_agent_version = "v1"` for the current parent model, `deepseek-v4-flash`, and `deepseek-v4-pro`, and keep `features.multi_agent_v2 = false`. A v2 target can encrypt away the cross-provider task payload even when the parent is v1.
 - Run `repair` after the parent model changes, then verify again.
 - Treat `DeepSeek` as text-only. Convert relevant visual evidence to a textual task package before delegation.
-- Keep the role's first-instance nickname candidate pinned to `DeepSeek`. Codex may add an ordinal suffix when multiple instances share one parent task because child names must remain unique.
+- Keep the first-instance nickname candidates pinned to `DeepSeek-v4-flash` and `DeepSeek-v4-pro`. Codex may add an ordinal suffix when multiple instances share one parent task because child names must remain unique.
 - Do not claim to customize the child icon. Native agent role files do not currently expose an icon field; Codex Desktop renders its generic subagent icon.
 - For daily work, have the parent Codex agent call:
 
   ```text
-  spawn_agent(agent_type="DeepSeek", fork_turns="none", ...)
+  spawn_agent(agent_type="DeepSeek-v4-flash", fork_turns="none", ...)
+  spawn_agent(agent_type="DeepSeek-v4-pro", fork_turns="none", ...)
   ```
 
-- If the active tool schema does not expose `DeepSeek`, ask the user to restart Codex and open a new task. Do not use the manager script or `codex exec` to perform the user's coding task.
+- If the active tool schema does not expose `DeepSeek-v4-flash` or `DeepSeek-v4-pro`, ask the user to restart Codex and open a new task. Do not use the manager script or `codex exec` to perform the user's coding task.
 - Accept daily work only from the DeepSeek child's returned result. If the child reports a missing assignment, report a handoff failure and run `repair`; the parent must not substitute its own output or present that fallback as DeepSeek work.
 - Read [references/worker-routing.md](references/worker-routing.md) when deciding what to delegate. Read [references/compatibility.md](references/compatibility.md) for configuration, routing, and rollback details.
 
@@ -32,8 +33,8 @@ Manage the native `DeepSeek` configuration only. Do not use this Skill as a subs
 2. For first-time configuration, run `setup --json`. For parent-model drift or damaged managed configuration, run `repair --json`.
 3. If the result is `credential_missing`, request the DeepSeek API key once. Never echo it or write it to a temporary file. Pass it only through standard input with `--api-key-stdin`.
 4. Let `setup` or `test` create an isolated validation task through the bundled desktop runtime.
-5. Accept `ready` only when both parent and DeepSeek catalog entries use plaintext V1, the child-task database metadata matches the DeepSeek provider, model, effort, role, and first-instance nickname, and the child returns `NATIVE_DEEPSEEK_WORKER_OK`.
-6. Report the final status, actual provider, model, reasoning effort, role, nickname, and backup location. Do not print credentials or raw event logs.
+5. Accept `ready` only when the parent, Flash, and Pro catalog entries use plaintext V1; each child-task database record matches the expected provider, model, effort, role, and first-instance nickname; and the children return `NATIVE_DEEPSEEK_WORKER_OK` and `NATIVE_DEEPSEEK_PRO_WORKER_OK` respectively.
+6. Report the final status, actual provider, both models, reasoning effort, roles, nicknames, and backup location. Do not print credentials or raw event logs.
 
 ## Use the manager
 

@@ -6,11 +6,13 @@
 - Python 3.9+ with the bundled TOML compatibility parser
 - ChatGPT/Codex desktop app launched at least once
 - Official DeepSeek Responses-compatible endpoint used by Codex
-- `deepseek-v4-flash`
+- `deepseek-v4-flash` and `deepseek-v4-pro`
 - Reasoning effort `high`
 - Text input and output only
 
-V4 Pro is not exposed by V1 until its native Codex path is verified with the same metadata checks used for Flash.
+V4 Pro uses Codex transport metadata derived from DeepSeek's official V4 Flash
+Codex template because the official bootstrap currently publishes only the Flash
+entry. Setup accepts Pro only after direct provider and native child-routing checks pass.
 
 ## Managed locations
 
@@ -18,43 +20,48 @@ The default `CODEX_HOME` is `~/.codex`:
 
 - Codex config: `$CODEX_HOME/config.toml`
 - Merged model catalog: `$CODEX_HOME/models-with-deepseek.json`
-- Subagent role: `$CODEX_HOME/agents/DeepSeek.toml`
+- Flash subagent role: `$CODEX_HOME/agents/DeepSeek-v4-flash.toml`
+- Pro subagent role: `$CODEX_HOME/agents/DeepSeek-v4-pro.toml`
 - Manifest and backups: `$CODEX_HOME/codex-deepseek-worker/`
 - Credential target: `codex-deepseek-worker-api-key`
 
 The manager does not change the top-level `model` or `model_provider`.
 
-The managed role sets `nickname_candidates = ["DeepSeek"]`. The first child under
-each new parent task is therefore displayed as `DeepSeek`. Codex enforces unique
+The managed roles set `nickname_candidates = ["DeepSeek-v4-flash"]` and
+`nickname_candidates = ["DeepSeek-v4-pro"]`. The first child under each new parent
+task is therefore displayed with the matching name. Codex enforces unique
 instance names within one parent task, so later children may receive ordinal suffixes.
 Native role configuration has no custom icon field; the child pane uses Codex
 Desktop's generic subagent icon.
 
 ## Role-name migration
 
-Version 1 originally installed `$CODEX_HOME/agents/DeepSeekWorker.toml`. A current
-`repair` recognizes that file only when its content hash matches the manager's
-manifest, includes it in the transaction backup, replaces it with
-`$CODEX_HOME/agents/DeepSeek.toml`, and verifies the new `DeepSeek` role. An
-unrecognized or user-modified legacy file is reported as a conflict and preserved.
+Earlier versions installed `$CODEX_HOME/agents/DeepSeekWorker.toml` and later
+`$CODEX_HOME/agents/DeepSeek.toml`. A current `repair` recognizes either file only
+when its content hash matches the manager's manifest, includes it in the transaction
+backup, replaces it with `$CODEX_HOME/agents/DeepSeek-v4-flash.toml`, and verifies
+the explicit model role. An unrecognized or user-modified legacy file is reported
+as a conflict and preserved.
 
 ## Native routing
 
 On macOS, the manager discovers the desktop app's bundled Codex runtime from the standard app locations. It does not search `PATH` or trust environment-variable install roots. On Windows, the caller must pass the exact trusted desktop runtime path explicitly with `--codex-bin`; the manager never automatically executes a discovered file.
 
-The manager reads the active parent model, disables `features.multi_agent_v2`, and sets both the parent model and `deepseek-v4-flash` catalog entries to `multi_agent_version = "v1"`. Current Desktop collaboration can select the handoff protocol from the target model; leaving DeepSeek on v2 can encrypt the cross-provider assignment even when the parent is v1. Run `repair` whenever the parent model changes or either catalog entry drifts.
+The manager reads the active parent model, disables `features.multi_agent_v2`, and sets the parent model plus both DeepSeek catalog entries to `multi_agent_version = "v1"`. Current Desktop collaboration can select the handoff protocol from the target model; leaving either DeepSeek target on v2 can encrypt the cross-provider assignment even when the parent is v1. Run `repair` whenever the parent model changes or any catalog entry drifts.
 
 Daily tasks must be delegated by the parent Codex agent:
 
 ```text
-spawn_agent(agent_type="DeepSeek", fork_turns="none", ...)
+spawn_agent(agent_type="DeepSeek-v4-flash", fork_turns="none", ...)
+spawn_agent(agent_type="DeepSeek-v4-pro", fork_turns="none", ...)
 ```
 
 If the current task does not recognize the custom role, restart Codex and open a new task. The management script is not a fallback coding agent.
 
 ## Verification evidence
 
-`setup` and `test` create an isolated validation task. Readiness requires both:
+`setup` and `test` create isolated validation tasks. Readiness requires all of the
+following for both workers:
 
 1. child-task metadata from the `threads` table in `$CODEX_HOME/state_*.sqlite`:
 
@@ -62,11 +69,15 @@ If the current task does not recognize the custom role, restart Codex and open a
    model_provider = deepseek
    model = deepseek-v4-flash
    reasoning_effort = high
-   agent_role = DeepSeek
-   agent_nickname = DeepSeek
+   agent_role = DeepSeek-v4-flash
+   agent_nickname = DeepSeek-v4-flash
    ```
 
 2. the exact child response `NATIVE_DEEPSEEK_WORKER_OK`.
+
+The Pro record must instead contain `model = deepseek-v4-pro`,
+`agent_role = DeepSeek-v4-pro`, and `agent_nickname = DeepSeek-v4-pro`, and its child must
+return `NATIVE_DEEPSEEK_PRO_WORKER_OK`.
 
 A model self-report or a successful direct API call alone is insufficient.
 

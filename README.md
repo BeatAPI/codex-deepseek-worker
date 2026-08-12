@@ -1,8 +1,20 @@
 # Codex DeepSeek
 
-Run DeepSeek V4 Flash as a native text-only worker inside Codex while keeping your existing Codex model as the orchestrator.
+Run DeepSeek V4 Flash and V4 Pro as native text-only workers inside Codex while keeping your existing Codex model as the orchestrator.
 
-This project is for developers who want more parallel coding capacity, a low-cost long-context worker, or an independent model pass without replacing their primary Codex workflow.
+**Bring DeepSeek V4 Pro's flagship agentic coding and 1M-token context into Codex
+without replacing your primary Codex model, login, or orchestration workflow.**
+
+Use the explicit worker names to choose the right tier per task:
+
+| Worker | Best for |
+| --- | --- |
+| `DeepSeek-v4-flash` | Fast repository exploration, focused tests, routine implementation, and economical parallel work |
+| `DeepSeek-v4-pro` | Difficult coding, deeper reasoning, long-context synthesis, and high-value independent review |
+
+DeepSeek describes V4 Pro as its flagship model with enhanced agentic coding,
+reasoning, and knowledge capabilities. This project makes that model a verified
+native Codex subagent instead of asking you to replace Codex wholesale.
 
 ## Why a worker instead of a model switch?
 
@@ -16,11 +28,11 @@ Codex remains responsible for task decomposition, visual inputs, integration dec
 
 The subagent is deliberately not the final decision-maker. Its agent contract requires a compact `WORKER_REPORT` with changed files, verification evidence, risks, and follow-ups.
 
-## What V1 installs
+## What it installs
 
-- Native Codex role: `DeepSeek`
-- First child display name in each new parent task: `DeepSeek`
-- Model: `deepseek-v4-flash`
+- Native Codex roles: `DeepSeek-v4-flash` and `DeepSeek-v4-pro`
+- First child display names in each new parent task use those same explicit model names
+- Models: `deepseek-v4-flash` and `deepseek-v4-pro`
 - Provider: official DeepSeek API
 - Reasoning effort: `high`
 - Secure credentials: macOS Keychain or Windows Credential Manager
@@ -59,7 +71,7 @@ After setup returns `ready`, restart Codex and open a new task so the native rol
 For an end-to-end desktop smoke test, send this in the new task:
 
 ```text
-Use the DeepSeek subagent exactly once. Ask it to reply exactly DEEPSEEK_UI_OK,
+Use the DeepSeek-v4-flash subagent exactly once. Ask it to reply exactly DEEPSEEK_UI_OK,
 wait for it, and return only its result. The parent must not answer on its behalf.
 ```
 
@@ -67,36 +79,46 @@ Open the completed child task and confirm the child itself received the assignme
 and returned `DEEPSEEK_UI_OK`. A completed child that reports a missing assignment
 is a failed handoff; the parent must not write the token or requested content itself.
 
-The first DeepSeek child in a new parent task is displayed as `DeepSeek`. Codex
+The first Flash child in a new parent task is displayed as `DeepSeek-v4-flash`,
+while the first Pro child is displayed as `DeepSeek-v4-pro`. Codex
 requires child instance names to be unique, so additional DeepSeek children under
-the same parent task may appear as `DeepSeek the 2nd`, `DeepSeek the 3rd`, and so on.
+the same parent task may receive ordinal suffixes.
 The child icon is currently owned by Codex Desktop's generic agent UI; native agent
 role configuration does not expose a custom icon field.
 
 Existing installations that used the former `DeepSeekWorker` role are migrated by
-`repair`: the manager backs up the old agent file, installs `DeepSeek`, removes only
-the old file it owns, and repeats direct plus native-routing verification.
+`repair`: the manager backs up the old agent file, installs `DeepSeek-v4-flash`,
+removes only the old file it owns, and repeats direct plus native-routing verification.
+Existing `DeepSeek` roles are migrated the same way to the explicit Flash name.
 
 ## Use the worker
 
 Ask the parent Codex agent to delegate a bounded task:
 
 ```text
-Use DeepSeek to inspect the authentication module, identify the failure path,
+Use DeepSeek-v4-flash to inspect the authentication module, identify the failure path,
 and return an evidence-based fix recommendation. Do not edit files.
 ```
 
 For implementation:
 
 ```text
-Use DeepSeek to implement the approved parser change and run the focused parser tests.
+Use DeepSeek-v4-flash to implement the approved parser change and run the focused parser tests.
 Return the diff summary, verification, risks, and follow-ups to the parent agent.
+```
+
+Use Pro for a bounded task where the stronger model is worth the higher API cost:
+
+```text
+Use DeepSeek-v4-pro to trace the cross-package failure, implement the smallest safe fix,
+and run the focused tests. Return a WORKER_REPORT to the parent agent.
 ```
 
 Codex delegates through the native agent mechanism:
 
 ```text
-spawn_agent(agent_type="DeepSeek", fork_turns="none", ...)
+spawn_agent(agent_type="DeepSeek-v4-flash", fork_turns="none", ...)
+spawn_agent(agent_type="DeepSeek-v4-pro", fork_turns="none", ...)
 ```
 
 Daily work does not run the setup Skill again.
@@ -135,7 +157,10 @@ py -3 codex-deepseek-worker\scripts\deepseek_worker.py uninstall --json
 
 ## Verification contract
 
-A successful direct API call is not enough. Native verification must confirm both:
+A successful direct API call is not enough. Native verification runs once for each
+worker and must confirm both the exact child response and matching Codex metadata.
+
+Flash:
 
 1. the child task returns `NATIVE_DEEPSEEK_WORKER_OK`; and
 2. Codex state metadata records:
@@ -144,20 +169,38 @@ A successful direct API call is not enough. Native verification must confirm bot
 model_provider = deepseek
 model = deepseek-v4-flash
 reasoning_effort = high
-agent_role = DeepSeek
-agent_nickname = DeepSeek
+agent_role = DeepSeek-v4-flash
+agent_nickname = DeepSeek-v4-flash
+```
+
+Pro returns `NATIVE_DEEPSEEK_PRO_WORKER_OK` and records:
+
+```text
+model_provider = deepseek
+model = deepseek-v4-pro
+reasoning_effort = high
+agent_role = DeepSeek-v4-pro
+agent_nickname = DeepSeek-v4-pro
 ```
 
 Only then does the manager return `status: ready`.
 
-The merged model catalog must also record `multi_agent_version = "v1"` for both
-the current parent model and `deepseek-v4-flash`. Pinning only the parent is not
-enough on current Desktop collaboration routing because the target model can select
-the encrypted V2 handoff path.
+The merged model catalog must also record `multi_agent_version = "v1"` for the
+current parent model, `deepseek-v4-flash`, and `deepseek-v4-pro`. Pinning only the
+parent is not enough on current Desktop collaboration routing because the target
+model can select the encrypted V2 handoff path.
 
 ## Model scope
 
-V1 intentionally defaults to DeepSeek V4 Flash. DeepSeek V4 Pro is available through DeepSeek's Chat Completions and Anthropic-compatible APIs, but this project will not expose Pro as a native Codex worker until the exact Codex routing path is independently verified.
+The `DeepSeek-v4-flash` role stays on V4 Flash for fast, economical work. The
+`DeepSeek-v4-pro` role exposes V4 Pro for demanding coding, reasoning, and long-context
+tasks. Both are text-only and use the official DeepSeek API. The manager derives
+Pro's Codex transport metadata from DeepSeek's official V4 Flash Codex template,
+then accepts it only after direct and native-routing verification pass.
+
+DeepSeek documents both model IDs, their shared 1M context, thinking modes, and
+tool-call support in its [V4 release](https://api-docs.deepseek.com/news/news260424/)
+and [model list](https://api-docs.deepseek.com/api/list-models/).
 
 ## Safety and rollback
 

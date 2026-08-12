@@ -124,7 +124,10 @@ class ManagerTests(unittest.TestCase):
         }
         merged = manager.merged_catalog(base, {"slug": manager.MODEL, "new": True}, "gpt-5.6-sol")
         by_slug = {item["slug"]: item for item in merged["models"]}
-        self.assertEqual(set(by_slug), {"gpt-test", "gpt-5.6-sol", manager.MODEL})
+        self.assertEqual(
+            set(by_slug),
+            {"gpt-test", "gpt-5.6-sol", manager.MODEL, manager.PRO_MODEL},
+        )
         self.assertEqual(by_slug["gpt-test"]["name"], "OpenAI test")
         self.assertTrue(by_slug["gpt-5.6-sol"]["old"])
         self.assertEqual(by_slug["gpt-5.6-sol"]["multi_agent_version"], manager.PARENT_MULTI_AGENT_VERSION)
@@ -136,6 +139,11 @@ class ManagerTests(unittest.TestCase):
                 "multi_agent_version": manager.PARENT_MULTI_AGENT_VERSION,
             },
         )
+        self.assertEqual(by_slug[manager.PRO_MODEL]["slug"], manager.PRO_MODEL)
+        self.assertEqual(
+            by_slug[manager.PRO_MODEL]["multi_agent_version"],
+            manager.PARENT_MULTI_AGENT_VERSION,
+        )
 
     def test_merged_catalog_pins_deepseek_child_v1_for_desktop_handoff(self) -> None:
         merged = manager.merged_catalog(
@@ -146,6 +154,10 @@ class ManagerTests(unittest.TestCase):
         by_slug = {item["slug"]: item for item in merged["models"]}
         self.assertEqual(
             by_slug[manager.MODEL]["multi_agent_version"],
+            manager.PARENT_MULTI_AGENT_VERSION,
+        )
+        self.assertEqual(
+            by_slug[manager.PRO_MODEL]["multi_agent_version"],
             manager.PARENT_MULTI_AGENT_VERSION,
         )
 
@@ -164,9 +176,9 @@ class ManagerTests(unittest.TestCase):
 
     def test_agent_is_standalone_text_only_high_reasoning(self) -> None:
         text = manager.expected_agent_text()
-        self.assertEqual(manager.ROLE, "DeepSeek")
-        self.assertIn('name = "DeepSeek"', text)
-        self.assertIn('nickname_candidates = ["DeepSeek"]', text)
+        self.assertEqual(manager.ROLE, "DeepSeek-v4-flash")
+        self.assertIn('name = "DeepSeek-v4-flash"', text)
+        self.assertIn('nickname_candidates = ["DeepSeek-v4-flash"]', text)
         self.assertNotIn("DeepSeekWorker", text)
         self.assertIn('model_provider = "deepseek"', text)
         self.assertIn('model_reasoning_effort = "high"', text)
@@ -175,6 +187,16 @@ class ManagerTests(unittest.TestCase):
         self.assertIn("WORKER_REPORT", text)
         self.assertIn("preserve unrelated user changes", text)
         self.assertIn("distinguish verified results from assumptions", text)
+
+    def test_pro_agent_is_standalone_and_uses_v4_pro(self) -> None:
+        text = manager.expected_pro_agent_text()
+        self.assertEqual(manager.PRO_ROLE, "DeepSeek-v4-pro")
+        self.assertIn('name = "DeepSeek-v4-pro"', text)
+        self.assertIn('nickname_candidates = ["DeepSeek-v4-pro"]', text)
+        self.assertIn(f'model = "{manager.PRO_MODEL}"', text)
+        self.assertIn('model_provider = "deepseek"', text)
+        self.assertIn('model_reasoning_effort = "high"', text)
+        self.assertIn("WORKER_REPORT", text)
 
     def test_legacy_agent_contract_remains_byte_compatible_for_migration(self) -> None:
         self.assertNotIn(
@@ -394,17 +416,23 @@ class ManagerTests(unittest.TestCase):
                                 "slug": manager.MODEL,
                                 "multi_agent_version": manager.PARENT_MULTI_AGENT_VERSION,
                             },
+                            {
+                                "slug": manager.PRO_MODEL,
+                                "multi_agent_version": manager.PARENT_MULTI_AGENT_VERSION,
+                            },
                         ]
                     }
                 )
             )
             paths.agent.parent.mkdir(parents=True, exist_ok=True)
             paths.agent.write_text(manager.expected_agent_text())
-            manager.write_manifest(paths, {"schema_version": 2})
+            paths.pro_agent.write_text(manager.expected_pro_agent_text())
+            manager.write_manifest(paths, {"schema_version": 5})
             status = manager.static_status(paths, "desktop-codex")
             self.assertEqual(status["status"], "configured")
             self.assertTrue(status["checks"]["parent_uses_plaintext_v1"])
             self.assertTrue(status["checks"]["deepseek_uses_plaintext_v1"])
+            self.assertTrue(status["checks"]["deepseek_pro_uses_plaintext_v1"])
             self.assertTrue(status["checks"]["desktop_multi_agent_v2_disabled"])
             self.assertTrue(status["checks"]["desktop_codex_detected"])
             self.assertTrue(status["checks"]["provider_valid"])
@@ -529,6 +557,61 @@ class ManagerTests(unittest.TestCase):
             self.assertFalse(any("model_catalog_json" in value for value in argv))
             self.assertTrue(result["desktop_fresh_session_native"])
             self.assertEqual(result["child_id"], "child-123")
+            self.assertEqual({key: result[key] for key in expected}, expected)
+
+    def test_native_test_routes_deepseek_pro_with_exact_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            paths = manager.resolve_paths(directory)
+            paths.config.parent.mkdir(parents=True, exist_ok=True)
+            paths.config.write_text('model = "gpt-5.6-sol"\n')
+            stdout = "\n".join(
+                (
+                    json.dumps(
+                        {
+                            "type": "item.completed",
+                            "item": {
+                                "type": "collab_tool_call",
+                                "tool": "spawn_agent",
+                                "receiver_thread_ids": ["child-pro-123"],
+                            },
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "type": "item.completed",
+                            "item": {
+                                "type": "collab_tool_call",
+                                "tool": "wait",
+                                "agents_states": {
+                                    "child-pro-123": {
+                                        "status": "completed",
+                                        "message": "NATIVE_DEEPSEEK_PRO_WORKER_OK",
+                                    }
+                                },
+                            },
+                        }
+                    ),
+                )
+            )
+            proc = SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+            expected = {
+                "model_provider": manager.PROVIDER,
+                "model": manager.PRO_MODEL,
+                "reasoning_effort": manager.EFFORT,
+                "agent_role": manager.PRO_ROLE,
+                "agent_nickname": manager.PRO_NICKNAME,
+            }
+            with mock.patch.object(manager.subprocess, "run", return_value=proc), mock.patch.object(
+                manager, "wait_for_child_metadata", return_value=expected
+            ):
+                result = manager.native_test(
+                    paths,
+                    "codex",
+                    manager.PRO_ROLE,
+                    manager.PRO_MODEL,
+                    manager.PRO_NICKNAME,
+                )
+            self.assertEqual(result["child_id"], "child-pro-123")
             self.assertEqual({key: result[key] for key in expected}, expected)
 
     def test_native_test_rejects_multiple_spawns(self) -> None:
@@ -938,16 +1021,89 @@ class ManagerTests(unittest.TestCase):
             self.assertEqual(paths.agent.read_text(), manager.expected_agent_text())
             self.assertFalse(legacy_agent.exists())
             manifest = manager.read_manifest(paths)
-            self.assertEqual(manifest["schema_version"], 4)
-            self.assertEqual(manifest["role"], "DeepSeek")
+            self.assertEqual(manifest["schema_version"], 6)
+            self.assertEqual(manifest["role"], "DeepSeek-v4-flash")
             self.assertTrue(manifest["legacy_agent_migrated"])
             self.assertTrue((Path(result["backup"]) / "DeepSeekWorker.toml").is_file())
+
+    def test_repair_migrates_deepseek_role_to_explicit_flash_name(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            paths = manager.resolve_paths(directory)
+            old_text = manager.expected_old_agent_text()
+            paths.config.parent.mkdir(parents=True, exist_ok=True)
+            paths.config.write_text('model = "gpt-5.6-sol"\n')
+            paths.old_agent.parent.mkdir(parents=True, exist_ok=True)
+            paths.old_agent.write_text(old_text)
+            manager.write_manifest(
+                paths,
+                {
+                    "schema_version": 4,
+                    "managed_agent_file": True,
+                    "agent_preexisted": False,
+                    "agent_sha256": manager.sha256_bytes(old_text.encode()),
+                },
+            )
+            with mock.patch.object(
+                manager,
+                "fetch_official_deepseek_model",
+                return_value={"slug": manager.MODEL},
+            ), mock.patch.object(
+                manager,
+                "load_base_catalog",
+                return_value={"models": [{"slug": "gpt-5.6-sol"}]},
+            ):
+                result = manager.install(paths, "codex")
+            self.assertTrue(result["migrated_role"])
+            self.assertFalse(paths.old_agent.exists())
+            self.assertEqual(paths.agent.read_text(), manager.expected_agent_text())
+            self.assertEqual(paths.pro_agent.read_text(), manager.expected_pro_agent_text())
+            self.assertTrue(manager.read_manifest(paths)["old_role_migrated"])
+            self.assertTrue((Path(result["backup"]) / "DeepSeek.toml").is_file())
+
+    def test_role_migration_preserves_preexisting_flash_agent_on_disable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            paths = manager.resolve_paths(directory)
+            old_text = manager.expected_old_agent_text()
+            flash_text = manager.expected_agent_text()
+            paths.config.parent.mkdir(parents=True, exist_ok=True)
+            paths.config.write_text('model = "gpt-5.6-sol"\n')
+            paths.old_agent.parent.mkdir(parents=True, exist_ok=True)
+            paths.old_agent.write_text(old_text)
+            paths.agent.write_text(flash_text)
+            manager.write_manifest(
+                paths,
+                {
+                    "schema_version": 4,
+                    "managed_agent_file": True,
+                    "agent_preexisted": False,
+                    "agent_sha256": manager.sha256_bytes(old_text.encode()),
+                },
+            )
+            with mock.patch.object(
+                manager,
+                "fetch_official_deepseek_model",
+                return_value={"slug": manager.MODEL},
+            ), mock.patch.object(
+                manager,
+                "load_base_catalog",
+                return_value={"models": [{"slug": "gpt-5.6-sol"}]},
+            ), mock.patch.object(manager, "credential_has_key", return_value=True):
+                manager.install(paths, "codex")
+                manifest = manager.read_manifest(paths)
+                disabled = manager.disable(paths)
+
+            self.assertFalse(manifest["managed_agent_file"])
+            self.assertTrue(manifest["agent_preexisted"])
+            self.assertTrue(manifest["adopted_existing"])
+            self.assertTrue(disabled["agent_preserved"])
+            self.assertTrue(paths.agent.is_file())
+            self.assertEqual(paths.agent.read_text(), flash_text)
 
     def test_repair_upgrades_manager_owned_deepseek_agent_contract(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             paths = manager.resolve_paths(directory)
             old_text = manager.expected_agent_text().replace(
-                'nickname_candidates = ["DeepSeek"]\n',
+                'nickname_candidates = ["DeepSeek-v4-flash"]\n',
                 "",
             )
             paths.config.parent.mkdir(parents=True, exist_ok=True)

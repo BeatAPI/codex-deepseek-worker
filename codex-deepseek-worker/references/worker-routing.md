@@ -1,6 +1,11 @@
 # Worker routing guide
 
-Use `DeepSeek` when the task is bounded, text-only, and benefits from long-context reading, parallel capacity, or an independent model pass.
+Use `DeepSeek-v4-flash` when the task is bounded, text-only, and benefits from long-context reading, parallel capacity, or an independent model pass.
+
+Use `DeepSeek-v4-pro` for the same bounded task shape when the work needs stronger
+reasoning, agentic coding, or synthesis across a difficult long context and the
+higher API cost is justified. Keep routine exploration, focused tests, and simple
+reviews on `DeepSeek-v4-flash` by default.
 
 ## Good worker tasks
 

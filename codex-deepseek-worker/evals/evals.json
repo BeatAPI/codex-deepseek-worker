@@ -40,13 +40,13 @@
     {
       "id": 7,
       "prompt": "After setup, how should I use the worker for a repository review?",
-      "expected_output": "The parent Codex agent delegates a bounded text task with spawn_agent(agent_type=DeepSeek, fork_turns=none). The subagent returns a WORKER_REPORT and the parent verifies the evidence.",
+      "expected_output": "The parent Codex agent delegates a bounded text task with spawn_agent(agent_type=DeepSeek-v4-flash, fork_turns=none) or uses DeepSeek-v4-pro for a demanding task. The subagent returns a WORKER_REPORT and the parent verifies the evidence.",
       "files": []
     },
     {
       "id": 8,
       "prompt": "Can I use DeepSeek V4 Pro as the native worker?",
-      "expected_output": "State that V1 intentionally verifies V4 Flash only. Do not claim native Pro support until the same Codex routing and metadata checks pass.",
+      "expected_output": "Run status first and require both direct-provider and native-routing verification. Pro is ready only when the child returns NATIVE_DEEPSEEK_PRO_WORKER_OK and Codex metadata records provider deepseek, model deepseek-v4-pro, role DeepSeek-v4-pro, and the matching nickname.",
       "files": []
     },
     {
@@ -58,7 +58,7 @@
     {
       "id": 10,
       "prompt": "Why does my DeepSeek child show Maxwell, and can the Skill give it a DeepSeek icon?",
-      "expected_output": "Explain that Maxwell comes from Codex's default nickname pool. Repair the managed role so its first nickname candidate is DeepSeek and verify agent_nickname metadata. Explain that additional instances in one parent task may get ordinal suffixes and that native agent role configuration does not expose a custom child icon field.",
+      "expected_output": "Explain that Maxwell comes from Codex's default nickname pool. Repair the managed roles so their first nickname candidates are DeepSeek-v4-flash and DeepSeek-v4-pro and verify agent_nickname metadata. Explain that additional instances in one parent task may get ordinal suffixes and that native agent role configuration does not expose a custom child icon field.",
       "files": []
     }
   ]
