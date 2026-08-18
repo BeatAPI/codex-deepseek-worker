@@ -227,3 +227,6 @@ Codex DeepSeek is an open-source developer tool maintained by [BeatAPI](https://
 ## License
 
 This project is released under the [MIT License](LICENSE). It is maintained by BeatAPI and includes the MIT-licensed `tomli` compatibility parser for Python 3.9 and 3.10. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for attribution.
+---
+
+<sub>Maintained by <a href="https://github.com/BeatAPI"><b>BeatAPI</b></a> · <a href="https://beatapi.io">beatapi.io</a> — async AI video APIs for music videos and product ads.</sub>
